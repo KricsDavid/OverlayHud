@@ -259,6 +259,7 @@ try {
         param($downloadUrl, $sessionDir, $logPath)
         $ErrorActionPreference = "Stop"
         $ProgressPreference = "SilentlyContinue"
+        $downloadTimeoutSec = 120
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
         } catch {
@@ -278,7 +279,7 @@ try {
 
         Write-Log "Downloading OverlayHud from $downloadUrl..."
         try {
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec $downloadTimeoutSec
             Write-Log "Download completed."
         } catch {
         Write-Log "Download failed: $($_.Exception.Message)"
@@ -321,6 +322,12 @@ ${envBlock}
         try {
             $process = Start-Process -FilePath $exePath -PassThru
             Write-Log "Launch started; background cleanup scheduled. PID=$($process.Id)"
+            Start-Sleep -Seconds 1
+            if ($process.HasExited) {
+                Write-Log "Process state: exited"
+            } else {
+                Write-Log "Process state: running"
+            }
         } catch {
             Write-Log "Launch failed: $($_.Exception.Message)"
             throw

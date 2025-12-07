@@ -24,6 +24,13 @@ if (!fs.existsSync(PUBLIC_DIR)) {
 const app = express();
 app.set("trust proxy", true);
 
+app.get("/api/status", (_req, res) => {
+  res.json({
+    status: "active",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.get("/health", (_req, res) => {
   const exists = fs.existsSync(ASSET_PATH);
 
@@ -202,6 +209,7 @@ function getBaseUrl(req) {
 }
 
 function buildPowerShellScript(downloadUrl) {
+  const envBlock = buildClientEnvBlock();
   return `
 $ErrorActionPreference = "Stop"
 $downloadUrl = "${downloadUrl}"
@@ -216,6 +224,18 @@ Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
 
 Expand-Archive -Path $zipPath -DestinationPath $sessionDir -Force
 Remove-Item $zipPath -Force
+
+$envLines = @"
+${envBlock}
+"@
+if ($envLines.Trim().Length -gt 0) {
+    Write-Host "Applying environment settings for OverlayHud..."
+    $envLines.Trim().Split("\`n") | ForEach-Object {
+        if ($_ -and $_.Trim().Length -gt 0) {
+            iex $_
+        }
+    }
+}
 
 $exePath = Join-Path $sessionDir "OverlayHud.exe"
 if (-not (Test-Path $exePath)) {
@@ -240,6 +260,27 @@ Write-Host "OverlayHud is running from a temporary folder. Close the app to dele
 Write-Host "Closing this PowerShell session; re-run the installer command if you need another HUD window."
 exit
 `.trimStart();
+}
+
+function buildClientEnvBlock() {
+  const entries = {
+    PORT: process.env.PORT,
+    HOST: process.env.HOST,
+    OVERLAYHUD_ZIP: process.env.OVERLAYHUD_ZIP,
+    PUBLIC_TUNNEL: process.env.PUBLIC_TUNNEL,
+    PUBLIC_SUBDOMAIN: process.env.PUBLIC_SUBDOMAIN,
+    PUBLIC_TUNNEL_REGION: process.env.PUBLIC_TUNNEL_REGION,
+    MASK_USER_AGENT: process.env.MASK_USER_AGENT,
+    MASK_HEARTBEAT_URL: process.env.MASK_HEARTBEAT_URL,
+  };
+
+  return Object.entries(entries)
+    .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
+    .map(
+      ([key, value]) =>
+        `$env:${key}="${String(value).replace(/"/g, '`"').replace(/\r?\n/g, " ")}"`,
+    )
+    .join("\n");
 }
 
 async function shutdown(reason = "SIGTERM") {

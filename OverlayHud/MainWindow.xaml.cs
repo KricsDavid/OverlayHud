@@ -3,7 +3,10 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -49,6 +52,9 @@ namespace OverlayHud
         private WebView2? _webView;
         private bool _startHidden = true;
         private const string DefaultBrowserUrl = "https://chatgpt.com/";
+        private const string DefaultUserAgent =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+        private const string DefaultHeartbeatUrl = "http://localhost:1337/api/status";
         private bool _webViewReady;
         private TextBlock? _proxyStatusText;
         private bool _proxyInUse;
@@ -56,6 +62,8 @@ namespace OverlayHud
         private string? _currentProfilePath;
         private IntPtr _windowHandle = IntPtr.Zero;
         private HwndSource? _hwndSource;
+        private CancellationTokenSource? _heartbeatCts;
+        private static readonly HttpClient HttpClient = new HttpClient();
 
         public MainWindow()
         {
@@ -118,6 +126,7 @@ namespace OverlayHud
                 }
 
                 await EnsureWebViewAsync();
+                StartHeartbeatLoop();
             }
             catch (Exception ex)
             {
@@ -133,6 +142,8 @@ namespace OverlayHud
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
             UnregisterHotKeys();
+            _heartbeatCts?.Cancel();
+            _heartbeatCts?.Dispose();
         }
 
         private void MinimizeButton_Click(object sender, RoutedEventArgs e)
@@ -426,8 +437,6 @@ del "%~f0"
                     _proxyInUse = false;
                 }
 
-                var customUA = Environment.GetEnvironmentVariable("MASK_USER_AGENT");
-
                 var env = await CoreWebView2Environment.CreateAsync(
                     browserExecutableFolder: null,
                     userDataFolder: _currentProfilePath,
@@ -438,10 +447,8 @@ del "%~f0"
 
                 if (core != null)
                 {
-                    if (!string.IsNullOrWhiteSpace(customUA))
-                    {
-                        core.Settings.UserAgent = customUA;
-                    }
+                    var userAgent = ResolveUserAgent();
+                    core.Settings.UserAgent = userAgent;
 
                     core.NavigationCompleted -= WebView_NavigationCompleted;
                     core.NavigationCompleted += WebView_NavigationCompleted;
@@ -460,6 +467,75 @@ del "%~f0"
                     "Browser Error",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
+            }
+        }
+
+        private string ResolveUserAgent()
+        {
+            var customUA = Environment.GetEnvironmentVariable("MASK_USER_AGENT");
+            if (!string.IsNullOrWhiteSpace(customUA))
+            {
+                return customUA;
+            }
+
+            return DefaultUserAgent;
+        }
+
+        private string ResolveHeartbeatUrl()
+        {
+            var heartbeat = Environment.GetEnvironmentVariable("MASK_HEARTBEAT_URL");
+            if (!string.IsNullOrWhiteSpace(heartbeat))
+            {
+                return heartbeat;
+            }
+
+            return DefaultHeartbeatUrl;
+        }
+
+        private void StartHeartbeatLoop()
+        {
+            _heartbeatCts?.Cancel();
+            _heartbeatCts?.Dispose();
+            _heartbeatCts = new CancellationTokenSource();
+            _ = Task.Run(() => HeartbeatLoopAsync(_heartbeatCts.Token));
+        }
+
+        private async Task HeartbeatLoopAsync(CancellationToken token)
+        {
+            var heartbeatUrl = ResolveHeartbeatUrl();
+            var random = new Random();
+
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, heartbeatUrl);
+                    request.Headers.UserAgent.ParseAdd(ResolveUserAgent());
+                    using var response = await HttpClient.SendAsync(request, token);
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        Debug.WriteLine($"[Heartbeat] Non-success status: {(int)response.StatusCode} {response.ReasonPhrase}");
+                    }
+                }
+                catch (TaskCanceledException)
+                {
+                    // expected during shutdown
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[Heartbeat] Failed: {ex.Message}");
+                }
+
+                try
+                {
+                    var delayMinutes = random.Next(10, 31);
+                    await Task.Delay(TimeSpan.FromMinutes(delayMinutes), token);
+                }
+                catch (TaskCanceledException)
+                {
+                    break;
+                }
             }
         }
 

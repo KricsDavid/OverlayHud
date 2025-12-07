@@ -1,0 +1,49 @@
+﻿<Window x:Class="OverlayHud.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        mc:Ignorable="d"
+        Title="AI HUD"
+        Width="420"
+        Height="640"
+        WindowStyle="ToolWindow"
+        ResizeMode="CanResizeWithGrip"
+        Topmost="True"
+        ShowInTaskbar="False"
+        Background="#FF202020">
+    <Border CornerRadius="6" BorderBrush="#FF404040" BorderThickness="1" Padding="4">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="28"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Simple custom title bar -->
+            <DockPanel Grid.Row="0">
+                <TextBlock Text="AI HUD"
+                           VerticalAlignment="Center"
+                           Margin="4,0,0,0"
+                           Foreground="White"
+                           FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                    <Button Width="24" Height="22" Margin="0,3,4,3"
+                            Content="—"
+                            Click="MinimizeButton_Click" />
+                    <Button Width="24" Height="22" Margin="0,3,0,3"
+                            Content="X"
+                            Click="CloseButton_Click" />
+                </StackPanel>
+            </DockPanel>
+
+            <!-- WebView2 content -->
+            <wv2:WebView2 x:Name="WebView"
+                          Grid.Row="1"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          Margin="0"
+                          DefaultBackgroundColor="Transparent" />
+        </Grid>
+    </Border>
+</Window>

@@ -4,9 +4,10 @@ const fs = require("fs");
 const os = require("os");
 const localtunnel = require("localtunnel");
 
-const PORT = Number(process.env.PORT || 8080);
+const PORT = Number(process.env.PORT || 5985);
 const HOST = process.env.HOST || "0.0.0.0";
 const PUBLIC_DIR = path.join(__dirname, "public");
+const STATIC_MAX_AGE = "1d";
 const ZIP_FILE = process.env.OVERLAYHUD_ZIP || "OverlayHud-win-x64.zip";
 const ASSET_PATH = path.join(PUBLIC_DIR, ZIP_FILE);
 const ENABLE_TUNNEL = process.env.PUBLIC_TUNNEL
@@ -48,6 +49,14 @@ app.get("/download", (req, res, next) => {
     });
   }
 
+  res.setHeader("Cache-Control", `public, max-age=${24 * 60 * 60}`);
+  try {
+    const stat = fs.statSync(ASSET_PATH);
+    res.setHeader("Content-Length", stat.size);
+  } catch (_) {
+    // best effort; ignore stat errors
+  }
+
   res.download(ASSET_PATH, ZIP_FILE, (err) => {
     if (err) {
       return next(err);
@@ -66,11 +75,16 @@ Write-Host "OverlayHud zip not found on server. Ask the host to upload ${ZIP_FIL
   const downloadBase = getBaseUrl(req);
   const script = buildPowerShellScript(`${downloadBase}/${ZIP_FILE}`);
 
+  res.setHeader("Cache-Control", `public, max-age=${24 * 60 * 60}`);
   res.setHeader("Content-Disposition", "attachment; filename=install.ps1");
   res.type("text/plain").send(script);
 });
 
-app.use(express.static(PUBLIC_DIR));
+app.use(
+  express.static(PUBLIC_DIR, {
+    maxAge: STATIC_MAX_AGE,
+  }),
+);
 
 app.get("/", (_req, res) => {
   const template = `
@@ -218,59 +232,62 @@ function buildPowerShellScript(downloadUrl) {
   const envBlock = buildClientEnvBlock();
   const envCleanup = buildClientEnvCleanupBlock();
   return `
-$ErrorActionPreference = "Stop"
-$downloadUrl = "${downloadUrl}"
-$sessionDir = Join-Path $env:TEMP ("OverlayHudSession_" + ([guid]::NewGuid().ToString("N")))
-$zipPath = Join-Path $sessionDir "OverlayHud.zip"
+$job = Start-Job -Name "OverlayHudInstall" -ScriptBlock {
+    param($downloadUrl, $zipFileName)
+    $ErrorActionPreference = "Stop"
+    $sessionDir = Join-Path $env:TEMP ("OverlayHudSession_" + ([guid]::NewGuid().ToString("N")))
+    $zipPath = Join-Path $sessionDir "OverlayHud.zip"
 
-Write-Host "Preparing temporary session at $sessionDir"
-New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null
+    Write-Host "Preparing temporary session at $sessionDir"
+    New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null
 
-Write-Host "Downloading OverlayHud from $downloadUrl..."
-Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
+    Write-Host "Downloading OverlayHud from $downloadUrl..."
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
 
-Expand-Archive -Path $zipPath -DestinationPath $sessionDir -Force
-Remove-Item $zipPath -Force
+    Expand-Archive -Path $zipPath -DestinationPath $sessionDir -Force
+    Remove-Item $zipPath -Force
 
-# Apply environment settings for OverlayHud
+    # Apply environment settings for OverlayHud
 ${envBlock}
 
-$exeName = "${exeName}"
-$exePath = Join-Path $sessionDir $exeName
+    $exeName = "${exeName}"
+    $exePath = Join-Path $sessionDir $exeName
 
-if (-not (Test-Path $exePath)) {
-    $candidate = Get-ChildItem -Path $sessionDir -Filter "*.exe" -File -Recurse | Select-Object -First 1
-    if ($candidate) {
-        $exePath = $candidate.FullName
+    if (-not (Test-Path $exePath)) {
+        $candidate = Get-ChildItem -Path $sessionDir -Filter "*.exe" -File -Recurse | Select-Object -First 1
+        if ($candidate) {
+            $exePath = $candidate.FullName
+        }
     }
-}
 
-if (-not (Test-Path $exePath)) {
-    throw "OverlayHud executable not found after extraction."
-}
-
-Write-Host "Launching $exePath (will clean up after exit)"
-$process = Start-Process -FilePath $exePath -PassThru
-
-Start-Job -ScriptBlock {
-    param($pid, $path)
-    try {
-        Wait-Process -Id $pid -ErrorAction SilentlyContinue
-    } catch {}
-    Start-Sleep -Seconds 2
-    if (Test-Path $path) {
-        Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $exePath)) {
+        throw "OverlayHud executable not found after extraction."
     }
-} -ArgumentList $process.Id, $sessionDir | Out-Null
 
-Write-Host "OverlayHud is running from a temporary folder. Close the app to delete the session."
-Write-Host "Closing this PowerShell session; re-run the installer command if you need another HUD window."
+    Write-Host "Launching $exePath (will clean up after exit)"
+    $process = Start-Process -FilePath $exePath -PassThru
 
-# Clean up environment variables we set
+    Start-Job -ScriptBlock {
+        param($pid, $path)
+        try {
+            Wait-Process -Id $pid -ErrorAction SilentlyContinue
+        } catch {}
+        Start-Sleep -Seconds 2
+        if (Test-Path $path) {
+            Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } -ArgumentList $process.Id, $sessionDir | Out-Null
+
+    Write-Host "OverlayHud is running from a temporary folder. Close the app to delete the session."
+
+    # Clean up environment variables we set
 ${envCleanup}
 
-# Clear sensitive script variables
-Remove-Variable downloadUrl, sessionDir, zipPath, exeName, exePath, process -ErrorAction SilentlyContinue
+    # Clear sensitive script variables
+    Remove-Variable downloadUrl, sessionDir, zipPath, exeName, exePath, process -ErrorAction SilentlyContinue
+} -ArgumentList "${downloadUrl}", "${ZIP_FILE}" | Out-Null
+
+Write-Host "Background install started; this PowerShell window can be closed."
 exit
 `.trimStart();
 }

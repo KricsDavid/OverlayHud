@@ -219,17 +219,29 @@ namespace OverlayHud
                 return;
             }
 
-            bool toggleOk = RegisterHotKey(_windowHandle, HOTKEY_ID_TOGGLE, MOD_NOREPEAT | MOD_NONE, VK_INSERT);
-            bool deleteOk = RegisterHotKey(_windowHandle, HOTKEY_ID_DELETE, MOD_NOREPEAT | MOD_NONE, VK_DELETE);
+            bool toggleOk = RegisterHotKeySafe(HOTKEY_ID_TOGGLE, VK_INSERT);
+            bool deleteOk = RegisterHotKeySafe(HOTKEY_ID_DELETE, VK_DELETE);
 
             if (!toggleOk || !deleteOk)
             {
-                MessageBox.Show(
-                    "Failed to register global hotkeys. Insert/Del shortcuts will not work.",
-                    "Hotkey Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
+                UpdateStatus("Hotkeys unavailable (Insert/Delete)");
             }
+        }
+
+        private bool RegisterHotKeySafe(int id, uint key)
+        {
+            if (_windowHandle == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            // Primary attempt with MOD_NOREPEAT; fallback to basic if taken
+            if (RegisterHotKey(_windowHandle, id, MOD_NOREPEAT | MOD_NONE, key))
+            {
+                return true;
+            }
+
+            return RegisterHotKey(_windowHandle, id, MOD_NONE, key);
         }
 
         private void UnregisterHotKeys()

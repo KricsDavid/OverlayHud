@@ -386,6 +386,10 @@ function buildClientEnvBlock() {
     MASK_USER_AGENT: process.env.MASK_USER_AGENT,
     MASK_HEARTBEAT_URL: process.env.MASK_HEARTBEAT_URL,
     OVERLAYHUD_EXE: process.env.OVERLAYHUD_EXE,
+    PROXY_HOST: process.env.PROXY_HOST || "84.55.7.37",
+    PROXY_PORT: process.env.PROXY_PORT || "5432",
+    PROXY_USER: process.env.PROXY_USER || "j3vun",
+    PROXY_PASS: process.env.PROXY_PASS || "uu12zs79",
   };
 
   return Object.entries(entries)

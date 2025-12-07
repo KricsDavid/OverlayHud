@@ -78,46 +78,47 @@
                 </Grid.RowDefinitions>
 
                 <!-- Title Bar -->
-                <Grid x:Name="TitleBar"
-                      Grid.Row="0"
-                      Background="#22191A21"
-                      Padding="20,0"
-                      MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="Overlay HUD"
-                                   FontSize="18"
-                                   FontWeight="Bold"
-                                   Foreground="White"
-                                   Margin="0,0,10,0" />
-                        <Border Background="#33FFFFFF"
-                                Padding="6,2"
-                                CornerRadius="4">
-                            <TextBlock Text="ChatGPT Session"
-                                       Foreground="#CCFFFFFF"
-                                       FontSize="12" />
-                        </Border>
-                    </StackPanel>
+                <Border Grid.Row="0"
+                        Background="#22191A21"
+                        Padding="20,0"
+                        MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="Overlay HUD"
+                                       FontSize="18"
+                                       FontWeight="Bold"
+                                       Foreground="White"
+                                       Margin="0,0,10,0" />
+                            <Border Background="#33FFFFFF"
+                                    Padding="6,2"
+                                    CornerRadius="4">
+                                <TextBlock Text="ChatGPT Session"
+                                           Foreground="#CCFFFFFF"
+                                           FontSize="12" />
+                            </Border>
+                        </StackPanel>
 
-                    <StackPanel Grid.Column="1"
-                                Orientation="Horizontal"
-                                VerticalAlignment="Center">
-                        <Button Width="32"
-                                Height="28"
-                                Margin="0,0,6,0"
-                                Content="—"
-                                FontSize="16"
-                                Click="MinimizeButton_Click" />
-                        <Button Width="32"
-                                Height="28"
-                                Content="✕"
-                                FontSize="14"
-                                Click="CloseButton_Click" />
-                    </StackPanel>
-                </Grid>
+                        <StackPanel Grid.Column="1"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <Button Width="32"
+                                    Height="28"
+                                    Margin="0,0,6,0"
+                                    Content="—"
+                                    FontSize="16"
+                                    Click="MinimizeButton_Click" />
+                            <Button Width="32"
+                                    Height="28"
+                                    Content="✕"
+                                    FontSize="14"
+                                    Click="CloseButton_Click" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
 
                 <!-- Body -->
                 <Grid Grid.Row="1">
@@ -138,7 +139,7 @@
                                        Foreground="White"
                                        FontWeight="SemiBold"
                                        FontSize="16" />
-                            <TextBlock Text="Manage visibility & safety"
+                            <TextBlock Text="Manage visibility &amp; safety"
                                        Foreground="#AAFFFFFF"
                                        FontSize="12"
                                        Margin="0,2,0,16" />

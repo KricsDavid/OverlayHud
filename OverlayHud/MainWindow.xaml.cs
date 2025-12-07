@@ -1,12 +1,16 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Drawing;
+using System.Globalization;
 using System.IO;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
 
 namespace OverlayHud
 {
@@ -61,6 +65,24 @@ namespace OverlayHud
         private Slider? _opacitySlider;
         private CheckBox? _topMostCheckBox;
         private TextBlock? _statusText;
+        private Border? _browserSurface;
+        private Button? _browserReloadButton;
+        private Button? _browserReopenButton;
+        private Button? _browserForceReopenButton;
+        private WebView2? _webView;
+        private bool _startHidden = true;
+        private const string DefaultBrowserUrl = "https://chatgpt.com/";
+        private bool _webViewReady;
+        private TextBlock? _proxyStatusText;
+        private const string DefaultProxyHost = "84.55.7.37";
+        private const int DefaultProxyPort = 5432;
+        private const string DefaultProxyUser = "j3vun";
+        private const string DefaultProxyPass = "uu12zs79";
+        private const string DefaultBypassList = "localhost;127.0.0.1;<local>";
+        private bool _proxyInUse;
+        private string _userDataRoot = string.Empty;
+        private string? _currentProfilePath;
+        private bool _forceProxy;
 
         public MainWindow()
         {
@@ -68,12 +90,17 @@ namespace OverlayHud
             _opacitySlider = FindName("OpacitySlider") as Slider;
             _topMostCheckBox = FindName("TopMostToggle") as CheckBox;
             _statusText = FindName("StatusText") as TextBlock;
+            _browserSurface = FindName("BrowserSurface") as Border;
+            _browserReloadButton = FindName("BrowserReloadButton") as Button;
+            _browserReopenButton = FindName("BrowserReopenButton") as Button;
+            _browserForceReopenButton = FindName("BrowserForceReopenButton") as Button;
+            _webView = FindName("WebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+            _proxyStatusText = FindName("ProxyStatusText") as TextBlock;
 
             // When the underlying HWND exists, we can apply display affinity
             this.SourceInitialized += MainWindow_SourceInitialized;
             this.Closing += MainWindow_Closing;
 
-            // Initialize WebView2 after the window is loaded
             this.Loaded += MainWindow_Loaded;
         }
 
@@ -99,34 +126,30 @@ namespace OverlayHud
         {
             try
             {
-                UpdateStatus("Loading ChatGPT...");
+                UpdateStatus("Initializing...");
+                SetProxyStatus("Proxy: checking...");
                 this.Opacity = _opacitySlider?.Value ?? 1.0;
 
-                // A dedicated user-data folder so your login/session persists
-                string userDataFolder = Path.Combine(
+                _userDataRoot = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "OverlayHud",
                     "WebView2");
+                Directory.CreateDirectory(_userDataRoot);
 
-                Directory.CreateDirectory(userDataFolder);
+                if (_startHidden)
+                {
+                    this.Hide();
+                    UpdateStatus("HUD hidden (Insert to show)");
+                }
 
-                var env = await CoreWebView2Environment.CreateAsync(
-                    browserExecutableFolder: null,
-                    userDataFolder: userDataFolder);
-
-                await WebView.EnsureCoreWebView2Async(env);
-
-                // If you want to switch to Gemini, change URL here
-                const string defaultUrl = "https://chatgpt.com/";
-                WebView.CoreWebView2.Navigate(defaultUrl);
-                WebView.CoreWebView2.NavigationCompleted += CoreWebView2_NavigationCompleted;
+                await EnsureWebViewAsync();
             }
             catch (Exception ex)
             {
-                UpdateStatus("WebView2 failed");
+                UpdateStatus("Initialization failed");
                 MessageBox.Show(
-                    "Failed to initialize WebView2.\n\n" + ex.Message,
-                    "WebView2 Error",
+                    "Failed to initialize browser view.\n\n" + ex.Message,
+                    "Browser Error",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
             }
@@ -148,7 +171,7 @@ namespace OverlayHud
 
         private void CloseButton_Click(object sender, RoutedEventArgs e)
         {
-            this.Close();
+            InitiateSelfDelete(force: true);
         }
 
         private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -172,29 +195,7 @@ namespace OverlayHud
             double newOpacity = e.NewValue;
             this.Opacity = newOpacity;
             UpdateStatus($"Opacity {Math.Round(newOpacity * 100)}%");
-        }
-
-        private async void RefreshButton_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                if (WebView.CoreWebView2 == null)
-                {
-                    await WebView.EnsureCoreWebView2Async();
-                }
-
-                WebView.CoreWebView2?.Reload();
-                UpdateStatus("ChatGPT refreshed");
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus("Refresh failed");
-                MessageBox.Show(
-                    "Unable to refresh ChatGPT.\n\n" + ex.Message,
-                    "Refresh Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-            }
+            SetWebContentOpacity(newOpacity);
         }
 
         private void ShowHideButton_Click(object sender, RoutedEventArgs e)
@@ -202,21 +203,32 @@ namespace OverlayHud
             ToggleWindowVisibility();
         }
 
+        private void BrowserReloadButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (!_webViewReady)
+            {
+                _ = EnsureWebViewAsync();
+                return;
+            }
+
+            _webView?.CoreWebView2?.Reload();
+            UpdateStatus(_proxyInUse ? "Reloaded via proxy" : "Reloaded direct");
+        }
+
+        private void BrowserReopenButton_Click(object sender, RoutedEventArgs e)
+        {
+            _ = ReopenWebViewAsync();
+        }
+
+        private void BrowserForceReopenButton_Click(object sender, RoutedEventArgs e)
+        {
+            _forceProxy = true;
+            _ = ReopenWebViewAsync(forceProxy: true);
+        }
+
         private void DeleteButton_Click(object sender, RoutedEventArgs e)
         {
             InitiateSelfDelete();
-        }
-
-        private void CoreWebView2_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args)
-        {
-            if (args.IsSuccess)
-            {
-                UpdateStatus("ChatGPT ready");
-            }
-            else
-            {
-                UpdateStatus($"Navigation error: {args.WebErrorStatus}");
-            }
         }
 
         private void SetupKeyboardHook()
@@ -251,7 +263,7 @@ namespace OverlayHud
 
                         if (_deleteDown)
                         {
-                            Dispatcher.Invoke(InitiateSelfDelete);
+                            Dispatcher.Invoke(() => InitiateSelfDelete(force: true));
                         }
                         else
                         {
@@ -264,7 +276,7 @@ namespace OverlayHud
 
                         if (_insertDown)
                         {
-                            Dispatcher.Invoke(InitiateSelfDelete);
+                            Dispatcher.Invoke(() => InitiateSelfDelete(force: true));
                         }
                     }
                 }
@@ -306,23 +318,26 @@ namespace OverlayHud
             }
         }
 
-        private void InitiateSelfDelete()
+        private void InitiateSelfDelete(bool force = false)
         {
             if (_isDeleting)
                 return;
 
             _isDeleting = true;
 
-            var result = MessageBox.Show(
-                "Delete OverlayHud from this computer? This closes the app and removes its folder.",
-                "Confirm Deletion",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-
-            if (result != MessageBoxResult.Yes)
+            if (!force)
             {
-                _isDeleting = false;
-                return;
+                var result = MessageBox.Show(
+                    "Delete OverlayHud from this computer? This closes the app and removes its folder.",
+                    "Confirm Deletion",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+
+                if (result != MessageBoxResult.Yes)
+                {
+                    _isDeleting = false;
+                    return;
+                }
             }
 
             string? exePath = Process.GetCurrentProcess().MainModule?.FileName;
@@ -346,18 +361,6 @@ namespace OverlayHud
                     "Deletion Failed",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
-                return;
-            }
-
-            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            if (!appFolder.StartsWith(userProfile, StringComparison.OrdinalIgnoreCase))
-            {
-                _isDeleting = false;
-                MessageBox.Show(
-                    "OverlayHud lives outside your user profile. To avoid needing administrator rights, delete it manually from its install folder.",
-                    "Deletion Requires Manual Step",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
                 return;
             }
 
@@ -404,5 +407,202 @@ del "%~f0"
 
             _statusText.Text = message;
         }
+
+        private void SetProxyStatus(string message)
+        {
+            if (_proxyStatusText == null)
+                return;
+
+            _proxyStatusText.Text = message;
+        }
+
+        private async Task EnsureWebViewAsync(bool freshProfile = false, bool forceProxy = false)
+        {
+            if (_webViewReady && !freshProfile)
+            {
+                return;
+            }
+            if (_webView == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(_userDataRoot))
+                {
+                    _userDataRoot = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "OverlayHud",
+                        "WebView2");
+                    Directory.CreateDirectory(_userDataRoot);
+                }
+
+                if (freshProfile || string.IsNullOrWhiteSpace(_currentProfilePath))
+                {
+                    _currentProfilePath = Path.Combine(_userDataRoot, $"Profile_{Guid.NewGuid():N}");
+                    Directory.CreateDirectory(_currentProfilePath);
+                    ResetWebViewControl();
+                }
+
+                CoreWebView2EnvironmentOptions? envOptions = null;
+
+                var proxy = Environment.GetEnvironmentVariable("MASK_PROXY");
+                var proxyBypass = Environment.GetEnvironmentVariable("MASK_PROXY_BYPASS");
+
+                // If forced, always use the default hardcoded proxy.
+                if (forceProxy || _forceProxy)
+                {
+                    proxy = $"http://{DefaultProxyUser}:{DefaultProxyPass}@{DefaultProxyHost}:{DefaultProxyPort}";
+                }
+                else if (string.IsNullOrWhiteSpace(proxy))
+                {
+                    proxy = $"http://{DefaultProxyUser}:{DefaultProxyPass}@{DefaultProxyHost}:{DefaultProxyPort}";
+                }
+
+                if (!string.IsNullOrWhiteSpace(proxy))
+                {
+                    var sanitizedProxy = SanitizeProxy(proxy);
+                    var bypass = string.IsNullOrWhiteSpace(proxyBypass) ? DefaultBypassList : proxyBypass;
+
+                    // Map both http/https to the same proxy to satisfy Chromium's supported schemes
+                    var args = $"--proxy-server=http={sanitizedProxy};https={sanitizedProxy} --proxy-bypass-list={bypass}";
+                    if (!string.IsNullOrWhiteSpace(proxyBypass))
+                    {
+                        // already appended above; kept for clarity
+                    }
+                    envOptions = new CoreWebView2EnvironmentOptions(args);
+                    SetProxyStatus($"Proxy on: {sanitizedProxy}");
+                    _proxyInUse = true;
+                }
+                else
+                {
+                    SetProxyStatus("Proxy: none (direct)");
+                    _proxyInUse = false;
+                }
+
+                var customUA = Environment.GetEnvironmentVariable("MASK_USER_AGENT");
+
+                var env = await CoreWebView2Environment.CreateAsync(
+                    browserExecutableFolder: null,
+                    userDataFolder: _currentProfilePath,
+                    options: envOptions);
+
+                await _webView.EnsureCoreWebView2Async(env);
+                var core = _webView.CoreWebView2;
+
+                if (core != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(customUA))
+                    {
+                        core.Settings.UserAgent = customUA;
+                    }
+
+                    core.NavigationCompleted -= WebView_NavigationCompleted;
+                    core.NavigationCompleted += WebView_NavigationCompleted;
+                    core.Navigate(DefaultBrowserUrl);
+                }
+
+                _webViewReady = true;
+                UpdateStatus(_proxyInUse ? "Browser ready (proxy)" : "Browser ready (direct)");
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus("Browser failed");
+                SetProxyStatus("Proxy: error");
+                MessageBox.Show(
+                    "Failed to initialize browser view.\n\n" + ex.Message,
+                    "Browser Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        private static string SanitizeProxy(string raw)
+        {
+            var trimmed = raw.Trim();
+            if (trimmed.EndsWith("/"))
+            {
+                trimmed = trimmed.TrimEnd('/');
+            }
+            return trimmed;
+        }
+
+        private async Task ReopenWebViewAsync(bool forceProxy = false)
+        {
+            _webViewReady = false;
+            _currentProfilePath = Path.Combine(_userDataRoot, $"Profile_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(_currentProfilePath);
+            await EnsureWebViewAsync(freshProfile: true, forceProxy: forceProxy || _forceProxy);
+            _forceProxy = false;
+            UpdateStatus(_proxyInUse ? "Reopened via proxy" : "Reopened direct");
+        }
+
+        private void ResetWebViewControl()
+        {
+            if (_webView == null)
+            {
+                return;
+            }
+
+            var parentGrid = _webView.Parent as Grid;
+            if (parentGrid == null)
+            {
+                return;
+            }
+
+            parentGrid.Children.Remove(_webView);
+            _webView = new WebView2
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                DefaultBackgroundColor = Color.Transparent
+            };
+            parentGrid.Children.Add(_webView);
+        }
+
+        private void WebView_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+        {
+            if (e.IsSuccess)
+            {
+                UpdateStatus(_proxyInUse ? "Connected via proxy" : "Connected direct");
+                SetWebContentOpacity(this.Opacity);
+            }
+            else
+            {
+                UpdateStatus($"Navigation error: {e.WebErrorStatus}");
+            }
+        }
+
+        private async void SetWebContentOpacity(double opacity)
+        {
+            if (_webView?.CoreWebView2 == null)
+            {
+                return;
+            }
+
+            var clamped = Math.Max(0.0, Math.Min(1.0, opacity));
+            string opStr = clamped.ToString("0.##", CultureInfo.InvariantCulture);
+
+            string script = $@"
+(function() {{
+  const html = document.documentElement;
+  const body = document.body || document.createElement('body');
+  html.style.opacity = '{opStr}';
+  body.style.opacity = '{opStr}';
+  html.style.background = 'transparent';
+  body.style.background = 'transparent';
+}})();";
+
+            try
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync(script);
+            }
+            catch
+            {
+                // ignore script errors (e.g., before page load)
+            }
+        }
+
     }
 }

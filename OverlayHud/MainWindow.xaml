@@ -130,39 +130,38 @@
                     <!-- Sidebar -->
                     <Border Grid.Column="0"
                             Background="{StaticResource SidebarGradient}"
-                            Padding="20,24"
+                            Padding="18,20"
                             BorderBrush="#22FFFFFF"
                             BorderThickness="0,1,1,0"
                             CornerRadius="0,0,0,22">
                         <StackPanel>
-                            <TextBlock Text="Control Center"
+                            <TextBlock Text="Controls"
                                        Foreground="White"
                                        FontWeight="SemiBold"
                                        FontSize="16" />
-                            <TextBlock Text="Manage visibility &amp; safety"
+                            <TextBlock Text="Visibility &amp; network"
                                        Foreground="#AAFFFFFF"
                                        FontSize="12"
-                                       Margin="0,2,0,16" />
+                                       Margin="0,2,0,12" />
 
-                            <StackPanel Margin="0,8,0,12">
-                                <TextBlock Text="Hotkeys"
-                                           Foreground="#CCFFFFFF"
-                                           FontWeight="Bold"
-                                           FontSize="13" />
-                                <TextBlock Text="Insert · toggle HUD"
-                                           Foreground="#AAFFFFFF"
-                                           FontSize="12" />
-                                <TextBlock Text="Delete + Insert · uninstall"
-                                           Foreground="#AAFFFFFF"
-                                           FontSize="12" />
-                            </StackPanel>
-
-                            <Separator Margin="0,4,0,8" />
+                            <Button x:Name="BrowserReloadButton"
+                                    Content="Reload Page"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Click="BrowserReloadButton_Click" />
+                            <Button x:Name="BrowserReopenButton"
+                                    Content="Reopen ChatGPT"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Click="BrowserReopenButton_Click" />
+                            <Button x:Name="BrowserForceReopenButton"
+                                    Content="Reopen (Force Proxy)"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Click="BrowserForceReopenButton_Click" />
 
                             <CheckBox x:Name="TopMostToggle"
                                       Content="Keep on top"
                                       IsChecked="True"
                                       Foreground="#F0F0F0"
+                                      Margin="0,8,0,0"
                                       Checked="TopMostToggle_Changed"
                                       Unchecked="TopMostToggle_Changed" />
 
@@ -172,16 +171,12 @@
                                            FontSize="12"
                                            Margin="0,0,0,4" />
                                 <Slider x:Name="OpacitySlider"
-                                        Minimum="0.6"
+                                        Minimum="0"
                                         Maximum="1"
                                         Value="1"
                                         TickPlacement="None"
                                         ValueChanged="OpacitySlider_ValueChanged" />
                             </StackPanel>
-
-                            <Button Content="Refresh ChatGPT"
-                                    Style="{StaticResource AccentButtonStyle}"
-                                    Click="RefreshButton_Click" />
 
                             <Button Content="Show / Hide Now"
                                     Style="{StaticResource AccentButtonStyle}"
@@ -193,21 +188,28 @@
                                     BorderBrush="#77FF5F5F"
                                     Click="DeleteButton_Click" />
 
-                            <StackPanel Margin="0,16,0,0">
+                            <StackPanel Margin="0,12,0,0">
                                 <TextBlock Text="Status"
                                            Foreground="#CCFFFFFF"
                                            FontWeight="Bold"
                                            FontSize="13" />
                                 <TextBlock x:Name="StatusText"
-                                           Text="Ready"
                                            Foreground="#88FFFFFF"
-                                           FontSize="12" />
+                                           FontSize="12"
+                                           Text="Ready" />
+                                <TextBlock x:Name="ProxyStatusText"
+                                           Foreground="#66FFFFFF"
+                                           FontSize="11"
+                                           Text="Proxy: checking..."
+                                           TextWrapping="Wrap"
+                                           MaxWidth="180" />
                             </StackPanel>
                         </StackPanel>
                     </Border>
 
-                    <!-- WebView Surface -->
-                    <Border Grid.Column="1"
+                    <!-- Browser surface -->
+                    <Border x:Name="BrowserSurface"
+                            Grid.Column="1"
                             Margin="0,12,12,12"
                             CornerRadius="18"
                             Background="#FF0F1017"

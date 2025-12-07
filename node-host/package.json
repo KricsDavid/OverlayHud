@@ -1,0 +1,27 @@
+{
+  "name": "overlayhud-host",
+  "version": "1.2.0",
+  "description": "Minimal Express server that serves the OverlayHud release zip for PowerShell install scripts.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "cross-env PORT=8080 HOST=0.0.0.0 node server.js",
+    "start:public": "cross-env PUBLIC_TUNNEL=true node server.js",
+    "start:public-sub": "cross-env PUBLIC_TUNNEL=true PUBLIC_SUBDOMAIN=overlayhud node server.js"
+  },
+  "keywords": [
+    "overlayhud",
+    "express",
+    "distribution"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1",
+    "localtunnel": "^2.0.2"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
+  }
+}

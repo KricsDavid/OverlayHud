@@ -1,0 +1,272 @@
+const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const os = require("os");
+const localtunnel = require("localtunnel");
+
+const PORT = Number(process.env.PORT || 1337);
+const HOST = process.env.HOST || "0.0.0.0";
+const PUBLIC_DIR = path.join(__dirname, "public");
+const ZIP_FILE = process.env.OVERLAYHUD_ZIP || "OverlayHud-win-x64.zip";
+const ASSET_PATH = path.join(PUBLIC_DIR, ZIP_FILE);
+const ENABLE_TUNNEL = process.env.PUBLIC_TUNNEL
+  ? String(process.env.PUBLIC_TUNNEL).toLowerCase() === "true"
+  : true;
+const TUNNEL_SUBDOMAIN = process.env.PUBLIC_SUBDOMAIN;
+const TUNNEL_REGION = process.env.PUBLIC_TUNNEL_REGION;
+let tunnelInstance;
+let isShuttingDown = false;
+
+if (!fs.existsSync(PUBLIC_DIR)) {
+  fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+}
+
+const app = express();
+app.set("trust proxy", true);
+
+app.get("/health", (_req, res) => {
+  const exists = fs.existsSync(ASSET_PATH);
+
+  res.json({
+    status: "ok",
+    assetFound: exists,
+    asset: ZIP_FILE,
+  });
+});
+
+app.get("/download", (req, res, next) => {
+  if (!fs.existsSync(ASSET_PATH)) {
+    return res.status(404).json({
+      error: `File ${ZIP_FILE} not found in ${PUBLIC_DIR}`,
+    });
+  }
+
+  res.download(ASSET_PATH, ZIP_FILE, (err) => {
+    if (err) {
+      return next(err);
+    }
+    console.log(`[${new Date().toISOString()}] download served to ${req.ip}`);
+  });
+});
+
+app.get("/install.ps1", (req, res) => {
+  if (!fs.existsSync(ASSET_PATH)) {
+    return res.status(404).type("text/plain").send(`# Asset missing
+Write-Host "OverlayHud zip not found on server. Ask the host to upload ${ZIP_FILE}."
+`);
+  }
+
+  const downloadBase = getBaseUrl(req);
+  const script = buildPowerShellScript(`${downloadBase}/${ZIP_FILE}`);
+
+  res.setHeader("Content-Disposition", "attachment; filename=install.ps1");
+  res.type("text/plain").send(script);
+});
+
+app.use(express.static(PUBLIC_DIR));
+
+app.get("/", (_req, res) => {
+  const template = `
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>OverlayHud Downloads</title>
+    <style>
+      body {
+        font-family: "Segoe UI", system-ui, sans-serif;
+        margin: 2rem auto;
+        max-width: 640px;
+        color: #f3f3f3;
+        background: #070a10;
+      }
+      a {
+        color: #6ec1ff;
+        text-decoration: none;
+        border-bottom: 1px dotted #6ec1ff;
+      }
+      .card {
+        background: rgba(255, 255, 255, 0.05);
+        padding: 1.5rem;
+        border-radius: 16px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>OverlayHud download</h1>
+      <p>Drop the latest <code>${ZIP_FILE}</code> into <code>${PUBLIC_DIR}</code> and this endpoint will serve it.</p>
+      <ul>
+        <li><a href="/download" download>Download via /download</a></li>
+        <li><a href="/${ZIP_FILE}" download>Direct file link</a></li>
+        <li><a href="/health">Health check</a></li>
+        <li><code>irm http://YOUR-HOST:${PORT}/install.ps1 \| iex</code></li>
+      </ul>
+      <p>PowerShell installer snippet:</p>
+      <pre>
+$url = "http://YOUR-HOST:${PORT}/${ZIP_FILE}"
+$tmp = Join-Path $env:TEMP "OverlayHud.zip"
+Invoke-WebRequest -Uri $url -OutFile $tmp
+Expand-Archive -Path $tmp -DestinationPath "$env:LOCALAPPDATA\\OverlayHudDeploy" -Force
+Start-Process "$env:LOCALAPPDATA\\OverlayHudDeploy\\OverlayHud.exe"
+      </pre>
+    </div>
+  </body>
+</html>`;
+
+  res.send(template);
+});
+
+app.use((err, _req, res, _next) => {
+  console.error(err);
+  res.status(500).json({ error: err.message });
+});
+
+const server = app.listen(PORT, HOST, () => {
+  const localUrl = `http://localhost:${PORT}`;
+  const lanUrl = getLanUrl(PORT);
+
+  console.log(`OverlayHud host listening on ${localUrl}`);
+  if (lanUrl) {
+    console.log(`LAN link: ${lanUrl}`);
+  } else {
+    console.log("LAN link could not be detected (no active IPv4 interface).");
+  }
+  logLinkSet("Local", localUrl);
+  if (lanUrl) {
+    logLinkSet("LAN   ", lanUrl);
+  }
+
+  if (!fs.existsSync(ASSET_PATH)) {
+    console.warn(
+      `Note: ${ZIP_FILE} not found in ${PUBLIC_DIR}. Upload/publish before sharing the link.`,
+    );
+  }
+
+  if (ENABLE_TUNNEL) {
+    openTunnel().catch((err) => {
+      console.error("Failed to start public tunnel:", err.message);
+    });
+  }
+});
+
+async function openTunnel() {
+  const tunnelOptions = {
+    port: PORT,
+  };
+
+  if (TUNNEL_SUBDOMAIN) {
+    tunnelOptions.subdomain = TUNNEL_SUBDOMAIN;
+  }
+
+  if (TUNNEL_REGION) {
+    tunnelOptions.region = TUNNEL_REGION;
+  }
+
+  tunnelInstance = await localtunnel(tunnelOptions);
+  logLinkSet("Public", tunnelInstance.url);
+  tunnelInstance.on("close", () => console.log("Public tunnel closed."));
+}
+
+function getLanUrl(port) {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === "IPv4" && !net.internal) {
+        return `http://${net.address}:${port}`;
+      }
+    }
+  }
+  return null;
+}
+
+function logLinkSet(label, baseUrl) {
+  const normalized = normalizeBaseUrl(baseUrl);
+  const downloadUrl = `${normalized}/${ZIP_FILE}`;
+  const installerUrl = `${normalized}/install.ps1`;
+
+  console.log(`${label} site: ${normalized}`);
+  console.log(`${label} download: ${downloadUrl}`);
+  console.log(`${label} install cmd: irm ${installerUrl} | iex`);
+}
+
+function normalizeBaseUrl(url) {
+  return url.endsWith("/") ? url.slice(0, -1) : url;
+}
+
+function getBaseUrl(req) {
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  const host = req.headers.host;
+  return `${proto}://${host}`;
+}
+
+function buildPowerShellScript(downloadUrl) {
+  return `
+$ErrorActionPreference = "Stop"
+$downloadUrl = "${downloadUrl}"
+$sessionDir = Join-Path $env:TEMP ("OverlayHudSession_" + ([guid]::NewGuid().ToString("N")))
+$zipPath = Join-Path $sessionDir "OverlayHud.zip"
+
+Write-Host "Preparing temporary session at $sessionDir"
+New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null
+
+Write-Host "Downloading OverlayHud from $downloadUrl..."
+Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
+
+Expand-Archive -Path $zipPath -DestinationPath $sessionDir -Force
+Remove-Item $zipPath -Force
+
+$exePath = Join-Path $sessionDir "OverlayHud.exe"
+if (-not (Test-Path $exePath)) {
+    throw "OverlayHud.exe not found after extraction."
+}
+
+Write-Host "Launching $exePath (will clean up after exit)"
+$process = Start-Process -FilePath $exePath -PassThru
+
+Start-Job -ScriptBlock {
+    param($pid, $path)
+    try {
+        Wait-Process -Id $pid -ErrorAction SilentlyContinue
+    } catch {}
+    Start-Sleep -Seconds 2
+    if (Test-Path $path) {
+        Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} -ArgumentList $process.Id, $sessionDir | Out-Null
+
+Write-Host "OverlayHud is running from a temporary folder. Close the app to delete the session."
+Write-Host "Closing this PowerShell session; re-run the installer command if you need another HUD window."
+exit
+`.trimStart();
+}
+
+async function shutdown(reason = "SIGTERM") {
+  if (isShuttingDown) {
+    return;
+  }
+
+  isShuttingDown = true;
+  console.log(`Shutting down OverlayHud host (${reason})...`);
+
+  try {
+    if (tunnelInstance) {
+      tunnelInstance.close();
+    }
+
+    await new Promise((resolve) => server.close(resolve));
+  } catch (err) {
+    console.error("Error during shutdown:", err);
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught exception:", error);
+  shutdown("uncaughtException");
+});
+

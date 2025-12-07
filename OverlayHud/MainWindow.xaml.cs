@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -21,46 +20,24 @@ namespace OverlayHud
         private const uint WDA_MONITOR = 0x00000001;
         private const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 
-        // Keyboard hook constants
-        private const int WH_KEYBOARD_LL = 13;
-        private const int WM_KEYDOWN = 0x0100;
-        private const int WM_KEYUP = 0x0101;
-        private const int WM_SYSKEYDOWN = 0x0104;
-        private const int WM_SYSKEYUP = 0x0105;
-        private const int VK_INSERT = 0x2D;
-        private const int VK_DELETE = 0x2E;
+        // Hotkey constants
+        private const int WM_HOTKEY = 0x0312;
+        private const uint MOD_NONE = 0x0000;
+        private const uint MOD_NOREPEAT = 0x4000;
+        private const uint VK_INSERT = 0x2D;
+        private const uint VK_DELETE = 0x2E;
+        private const int HOTKEY_ID_TOGGLE = 1;
+        private const int HOTKEY_ID_DELETE = 2;
 
         [DllImport("user32.dll")]
         private static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
 
-        [DllImport("user32.dll")]
-        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
-        [DllImport("user32.dll")]
-        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
-        [DllImport("user32.dll")]
-        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr GetModuleHandle(string? lpModuleName);
-
-        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct KbdLlHookStruct
-        {
-            public int VkCode;
-            public int ScanCode;
-            public int Flags;
-            public int Time;
-            public IntPtr DwExtraInfo;
-        }
-
-        private LowLevelKeyboardProc? _keyboardCallback;
-        private IntPtr _keyboardHookHandle = IntPtr.Zero;
-        private bool _insertDown;
-        private bool _deleteDown;
         private bool _isDeleting;
         private Slider? _opacitySlider;
         private CheckBox? _topMostCheckBox;
@@ -74,15 +51,11 @@ namespace OverlayHud
         private const string DefaultBrowserUrl = "https://chatgpt.com/";
         private bool _webViewReady;
         private TextBlock? _proxyStatusText;
-        private const string DefaultProxyHost = "84.55.7.37";
-        private const int DefaultProxyPort = 5432;
-        private const string DefaultProxyUser = "j3vun";
-        private const string DefaultProxyPass = "uu12zs79";
-        private const string DefaultBypassList = "localhost;127.0.0.1;<local>";
         private bool _proxyInUse;
         private string _userDataRoot = string.Empty;
         private string? _currentProfilePath;
-        private bool _forceProxy;
+        private IntPtr _windowHandle = IntPtr.Zero;
+        private HwndSource? _hwndSource;
 
         public MainWindow()
         {
@@ -106,11 +79,11 @@ namespace OverlayHud
 
         private void MainWindow_SourceInitialized(object? sender, EventArgs e)
         {
-            var hwnd = new WindowInteropHelper(this).Handle;
-            if (hwnd == IntPtr.Zero)
+            _windowHandle = new WindowInteropHelper(this).Handle;
+            if (_windowHandle == IntPtr.Zero)
                 return;
 
-            bool ok = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+            bool ok = SetWindowDisplayAffinity(_windowHandle, WDA_EXCLUDEFROMCAPTURE);
 
             if (!ok)
             {
@@ -119,7 +92,9 @@ namespace OverlayHud
                 //                 "Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
 
-            SetupKeyboardHook();
+            _hwndSource = HwndSource.FromHwnd(_windowHandle);
+            _hwndSource?.AddHook(WndProc);
+            RegisterHotKeys();
         }
 
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -157,11 +132,7 @@ namespace OverlayHud
 
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
-            if (_keyboardHookHandle != IntPtr.Zero)
-            {
-                UnhookWindowsHookEx(_keyboardHookHandle);
-                _keyboardHookHandle = IntPtr.Zero;
-            }
+            UnregisterHotKeys();
         }
 
         private void MinimizeButton_Click(object sender, RoutedEventArgs e)
@@ -222,8 +193,7 @@ namespace OverlayHud
 
         private void BrowserForceReopenButton_Click(object sender, RoutedEventArgs e)
         {
-            _forceProxy = true;
-            _ = ReopenWebViewAsync(forceProxy: true);
+            _ = ReopenWebViewAsync();
         }
 
         private void DeleteButton_Click(object sender, RoutedEventArgs e)
@@ -231,69 +201,56 @@ namespace OverlayHud
             InitiateSelfDelete();
         }
 
-        private void SetupKeyboardHook()
+        private void RegisterHotKeys()
         {
-            _keyboardCallback = KeyboardHookCallback;
-            IntPtr moduleHandle = GetModuleHandle(null);
-            _keyboardHookHandle = SetWindowsHookEx(WH_KEYBOARD_LL, _keyboardCallback, moduleHandle, 0);
+            if (_windowHandle == IntPtr.Zero)
+            {
+                return;
+            }
 
-            if (_keyboardHookHandle == IntPtr.Zero)
+            bool toggleOk = RegisterHotKey(_windowHandle, HOTKEY_ID_TOGGLE, MOD_NOREPEAT | MOD_NONE, VK_INSERT);
+            bool deleteOk = RegisterHotKey(_windowHandle, HOTKEY_ID_DELETE, MOD_NOREPEAT | MOD_NONE, VK_DELETE);
+
+            if (!toggleOk || !deleteOk)
             {
                 MessageBox.Show(
-                    "Failed to register the global keyboard hook. Hotkeys will not work.",
+                    "Failed to register global hotkeys. Insert/Del shortcuts will not work.",
                     "Hotkey Error",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
         }
 
-        private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        private void UnregisterHotKeys()
         {
-            if (nCode >= 0)
+            if (_windowHandle == IntPtr.Zero)
             {
-                var hookData = Marshal.PtrToStructure<KbdLlHookStruct>(lParam);
-                bool isKeyDown = wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN;
-                bool isKeyUp = wParam == (IntPtr)WM_KEYUP || wParam == (IntPtr)WM_SYSKEYUP;
+                return;
+            }
 
-                if (isKeyDown)
+            UnregisterHotKey(_windowHandle, HOTKEY_ID_TOGGLE);
+            UnregisterHotKey(_windowHandle, HOTKEY_ID_DELETE);
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg == WM_HOTKEY)
+            {
+                int id = wParam.ToInt32();
+                switch (id)
                 {
-                    if (hookData.VkCode == VK_INSERT && !_insertDown)
-                    {
-                        _insertDown = true;
-
-                        if (_deleteDown)
-                        {
-                            Dispatcher.Invoke(() => InitiateSelfDelete(force: true));
-                        }
-                        else
-                        {
-                            Dispatcher.Invoke(ToggleWindowVisibility);
-                        }
-                    }
-                    else if (hookData.VkCode == VK_DELETE && !_deleteDown)
-                    {
-                        _deleteDown = true;
-
-                        if (_insertDown)
-                        {
-                            Dispatcher.Invoke(() => InitiateSelfDelete(force: true));
-                        }
-                    }
-                }
-                else if (isKeyUp)
-                {
-                    if (hookData.VkCode == VK_INSERT)
-                    {
-                        _insertDown = false;
-                    }
-                    else if (hookData.VkCode == VK_DELETE)
-                    {
-                        _deleteDown = false;
-                    }
+                    case HOTKEY_ID_TOGGLE:
+                        Dispatcher.Invoke(ToggleWindowVisibility);
+                        handled = true;
+                        break;
+                    case HOTKEY_ID_DELETE:
+                        Dispatcher.Invoke(() => InitiateSelfDelete(force: true));
+                        handled = true;
+                        break;
                 }
             }
 
-            return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
+            return IntPtr.Zero;
         }
 
         private void ToggleWindowVisibility()
@@ -416,7 +373,7 @@ del "%~f0"
             _proxyStatusText.Text = message;
         }
 
-        private async Task EnsureWebViewAsync(bool freshProfile = false, bool forceProxy = false)
+        private async Task EnsureWebViewAsync(bool freshProfile = false)
         {
             if (_webViewReady && !freshProfile)
             {
@@ -450,29 +407,17 @@ del "%~f0"
                 var proxy = Environment.GetEnvironmentVariable("MASK_PROXY");
                 var proxyBypass = Environment.GetEnvironmentVariable("MASK_PROXY_BYPASS");
 
-                // If forced, always use the default hardcoded proxy.
-                if (forceProxy || _forceProxy)
-                {
-                    proxy = $"http://{DefaultProxyUser}:{DefaultProxyPass}@{DefaultProxyHost}:{DefaultProxyPort}";
-                }
-                else if (string.IsNullOrWhiteSpace(proxy))
-                {
-                    proxy = $"http://{DefaultProxyUser}:{DefaultProxyPass}@{DefaultProxyHost}:{DefaultProxyPort}";
-                }
-
                 if (!string.IsNullOrWhiteSpace(proxy))
                 {
                     var sanitizedProxy = SanitizeProxy(proxy);
-                    var bypass = string.IsNullOrWhiteSpace(proxyBypass) ? DefaultBypassList : proxyBypass;
-
-                    // Map both http/https to the same proxy to satisfy Chromium's supported schemes
-                    var args = $"--proxy-server=http={sanitizedProxy};https={sanitizedProxy} --proxy-bypass-list={bypass}";
+                    var args = $"--proxy-server={sanitizedProxy}";
                     if (!string.IsNullOrWhiteSpace(proxyBypass))
                     {
-                        // already appended above; kept for clarity
+                        args += $" --proxy-bypass-list={proxyBypass}";
                     }
+
                     envOptions = new CoreWebView2EnvironmentOptions(args);
-                    SetProxyStatus($"Proxy on: {sanitizedProxy}");
+                    SetProxyStatus($"Proxy on (env): {sanitizedProxy}");
                     _proxyInUse = true;
                 }
                 else
@@ -528,13 +473,12 @@ del "%~f0"
             return trimmed;
         }
 
-        private async Task ReopenWebViewAsync(bool forceProxy = false)
+        private async Task ReopenWebViewAsync()
         {
             _webViewReady = false;
             _currentProfilePath = Path.Combine(_userDataRoot, $"Profile_{Guid.NewGuid():N}");
             Directory.CreateDirectory(_currentProfilePath);
-            await EnsureWebViewAsync(freshProfile: true, forceProxy: forceProxy || _forceProxy);
-            _forceProxy = false;
+            await EnsureWebViewAsync(freshProfile: true);
             UpdateStatus(_proxyInUse ? "Reopened via proxy" : "Reopened direct");
         }
 

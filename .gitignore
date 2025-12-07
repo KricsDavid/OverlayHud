@@ -10,6 +10,8 @@
 *.userosscache
 *.sln.docstates
 *.env
+# Explicitly ignore node-host env
+node-host/.env
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs

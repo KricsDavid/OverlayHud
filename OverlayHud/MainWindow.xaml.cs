@@ -455,12 +455,18 @@ del "%~f0"
 
                 var proxy = Environment.GetEnvironmentVariable("MASK_PROXY");
                 var proxyBypass = Environment.GetEnvironmentVariable("MASK_PROXY_BYPASS");
-                if (string.IsNullOrWhiteSpace(proxy))
+                var proxyDisabled = Environment.GetEnvironmentVariable("MASK_PROXY_DISABLE");
+
+                bool useProxy =
+                    string.IsNullOrWhiteSpace(proxyDisabled) &&
+                    !IsProxyDisabledValue(proxy);
+
+                if (useProxy && string.IsNullOrWhiteSpace(proxy))
                 {
                     proxy = BuildDefaultProxy();
                 }
 
-                if (!string.IsNullOrWhiteSpace(proxy))
+                if (useProxy && !string.IsNullOrWhiteSpace(proxy))
                 {
                     var sanitizedProxy = SanitizeProxy(proxy);
                     var args = $"--proxy-server={sanitizedProxy}";
@@ -527,6 +533,17 @@ del "%~f0"
         {
             // auth in URI format for WebView2 command-line proxy
             return $"http://{DefaultProxyUser}:{DefaultProxyPass}@{DefaultProxyHost}:{DefaultProxyPort}";
+        }
+
+        private static bool IsProxyDisabledValue(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            var val = value.Trim().ToLowerInvariant();
+            return val == "off" || val == "none" || val == "disabled" || val == "0";
         }
 
         private string ResolveHeartbeatUrl()

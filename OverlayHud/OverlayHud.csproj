@@ -7,6 +7,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <AssemblyName>AudioDriverAssist</AssemblyName>
+    <Description>Realtek High Definition Audio Background Service</Description>
+    <Company>Realtek Semiconductor Corp.</Company>
+    <Product>Realtek Audio Manager</Product>
+    <Copyright>Copyright © 2024 Realtek Semiconductor Corp.</Copyright>
+    <FileVersion>6.0.9239.1</FileVersion>
+    <AssemblyVersion>6.0.9239.1</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>

@@ -292,6 +292,7 @@ ${envBlock}
     } -ArgumentList $process.Id, $sessionDir | Out-Null
 
     Write-Log "OverlayHud is running; close the app to delete the session."
+    Write-Log "Install finished."
 
     # Clean up environment variables we set
 ${envCleanup}

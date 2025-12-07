@@ -63,6 +63,7 @@ namespace OverlayHud
         private IntPtr _windowHandle = IntPtr.Zero;
         private HwndSource? _hwndSource;
         private CancellationTokenSource? _heartbeatCts;
+        private bool _hotkeysRegistered;
         private static readonly HttpClient HttpClient = new HttpClient();
 
         public MainWindow()
@@ -126,6 +127,12 @@ namespace OverlayHud
                 }
 
                 await EnsureWebViewAsync();
+                // Retry hotkey registration once after load in case the initial attempt failed.
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(500);
+                    Dispatcher.Invoke(RegisterHotKeys);
+                });
                 StartHeartbeatLoop();
             }
             catch (Exception ex)
@@ -214,6 +221,13 @@ namespace OverlayHud
 
         private void RegisterHotKeys()
         {
+            if (_hotkeysRegistered)
+            {
+                return;
+            }
+
+            _hotkeysRegistered = false;
+
             if (_windowHandle == IntPtr.Zero)
             {
                 return;
@@ -225,7 +239,11 @@ namespace OverlayHud
             if (!toggleOk || !deleteOk)
             {
                 UpdateStatus("Hotkeys unavailable (Insert/Delete)");
+                return;
             }
+
+            _hotkeysRegistered = true;
+            UpdateStatus("Hotkeys ready (Insert/Del)");
         }
 
         private bool RegisterHotKeySafe(int id, uint key)
@@ -246,6 +264,7 @@ namespace OverlayHud
 
         private void UnregisterHotKeys()
         {
+            _hotkeysRegistered = false;
             if (_windowHandle == IntPtr.Zero)
             {
                 return;

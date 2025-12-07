@@ -70,6 +70,7 @@ namespace OverlayHud
         private bool _hotkeysRegistered;
         private DateTime _lastInsertHotkeyUtc = DateTime.MinValue;
         private static readonly TimeSpan DeleteComboWindow = TimeSpan.FromSeconds(1.5);
+        private bool _forceNoProxy;
         private static readonly HttpClient HttpClient = new HttpClient();
 
         public MainWindow()
@@ -217,6 +218,12 @@ namespace OverlayHud
 
         private void BrowserForceReopenButton_Click(object sender, RoutedEventArgs e)
         {
+            _ = ReopenWebViewAsync();
+        }
+
+        private void BrowserDirectButton_Click(object sender, RoutedEventArgs e)
+        {
+            _forceNoProxy = true;
             _ = ReopenWebViewAsync();
         }
 
@@ -458,7 +465,9 @@ del "%~f0"
                 var proxyDisabled = Environment.GetEnvironmentVariable("MASK_PROXY_DISABLE");
 
                 bool useProxy =
+                    !_forceNoProxy &&
                     string.IsNullOrWhiteSpace(proxyDisabled) &&
+                    !IsProxyDisabledValue(proxyDisabled) &&
                     !IsProxyDisabledValue(proxy);
 
                 if (useProxy && string.IsNullOrWhiteSpace(proxy))

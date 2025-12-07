@@ -156,6 +156,10 @@
                                     Content="Reopen (Force Proxy)"
                                     Style="{StaticResource AccentButtonStyle}"
                                     Click="BrowserForceReopenButton_Click" />
+                            <Button x:Name="BrowserDirectButton"
+                                    Content="Start ChatGPT without proxy"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Click="BrowserDirectButton_Click" />
 
                             <CheckBox x:Name="TopMostToggle"
                                       Content="Keep on top"

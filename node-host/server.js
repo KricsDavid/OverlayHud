@@ -220,7 +220,7 @@ function normalizeBaseUrl(url) {
 }
 
 function getBaseUrl(req) {
-  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
   const host = req.headers.host;
   return `${proto}://${host}`;
 }
@@ -238,6 +238,11 @@ $job = Start-Job -Name "OverlayHudInstall" -ScriptBlock {
     param($downloadUrl)
     $ErrorActionPreference = "Stop"
     $ProgressPreference = "SilentlyContinue"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+    } catch {
+        # best-effort
+    }
     $sessionDir = Join-Path $env:TEMP ("OverlayHudSession_" + ([guid]::NewGuid().ToString("N")))
     $zipPath = Join-Path $sessionDir "OverlayHud.zip"
     $logPath = Join-Path $sessionDir "install.log"
@@ -252,12 +257,22 @@ $job = Start-Job -Name "OverlayHudInstall" -ScriptBlock {
     Write-Log "Preparing temporary session at $sessionDir"
 
     Write-Log "Downloading OverlayHud from $downloadUrl..."
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
-    Write-Log "Download completed."
+    try {
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing
+        Write-Log "Download completed."
+    } catch {
+        Write-Log "Download failed: $($_.Exception.Message)"
+        throw
+    }
 
-    Expand-Archive -Path $zipPath -DestinationPath $sessionDir -Force
-    Remove-Item $zipPath -Force
-    Write-Log "Package extracted."
+    try {
+        Expand-Archive -Path $zipPath -DestinationPath $sessionDir -Force
+        Remove-Item $zipPath -Force
+        Write-Log "Package extracted."
+    } catch {
+        Write-Log "Extraction failed: $($_.Exception.Message)"
+        throw
+    }
 
     # Apply environment settings for OverlayHud
 ${envBlock}
@@ -277,8 +292,13 @@ ${envBlock}
     }
 
     Write-Log "Launching $exePath (will clean up after exit)"
-    $process = Start-Process -FilePath $exePath -PassThru
-    Write-Log "Launch started; background cleanup scheduled."
+    try {
+        $process = Start-Process -FilePath $exePath -PassThru
+        Write-Log "Launch started; background cleanup scheduled. PID=$($process.Id)"
+    } catch {
+        Write-Log "Launch failed: $($_.Exception.Message)"
+        throw
+    }
 
     Start-Job -ScriptBlock {
         param($pid, $path)

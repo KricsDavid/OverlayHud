@@ -54,7 +54,7 @@ namespace OverlayHud
         private const string DefaultBrowserUrl = "https://chatgpt.com/";
         private const string DefaultUserAgent =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-        private const string DefaultHeartbeatUrl = "http://localhost:1337/api/status";
+        private const string DefaultHeartbeatUrl = "";
         private bool _webViewReady;
         private TextBlock? _proxyStatusText;
         private bool _proxyInUse;
@@ -494,15 +494,22 @@ del "%~f0"
 
         private void StartHeartbeatLoop()
         {
+            var heartbeatUrl = ResolveHeartbeatUrl();
+            if (string.IsNullOrWhiteSpace(heartbeatUrl) ||
+                !heartbeatUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                Debug.WriteLine("[Heartbeat] Skipped (no HTTPS heartbeat URL provided)");
+                return;
+            }
+
             _heartbeatCts?.Cancel();
             _heartbeatCts?.Dispose();
             _heartbeatCts = new CancellationTokenSource();
-            _ = Task.Run(() => HeartbeatLoopAsync(_heartbeatCts.Token));
+            _ = Task.Run(() => HeartbeatLoopAsync(heartbeatUrl, _heartbeatCts.Token));
         }
 
-        private async Task HeartbeatLoopAsync(CancellationToken token)
+        private async Task HeartbeatLoopAsync(string heartbeatUrl, CancellationToken token)
         {
-            var heartbeatUrl = ResolveHeartbeatUrl();
             var random = new Random();
 
             while (!token.IsCancellationRequested)

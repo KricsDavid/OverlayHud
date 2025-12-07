@@ -4,7 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const localtunnel = require("localtunnel");
 
-const PORT = Number(process.env.PORT || 1337);
+const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || "0.0.0.0";
 const PUBLIC_DIR = path.join(__dirname, "public");
 const ZIP_FILE = process.env.OVERLAYHUD_ZIP || "OverlayHud-win-x64.zip";
@@ -172,7 +172,7 @@ async function openTunnel() {
   }
 
   tunnelInstance = await localtunnel(tunnelOptions);
-  logLinkSet("Public", tunnelInstance.url);
+  logLinkSet("Public", tunnelInstance.url, { recommend: true });
   tunnelInstance.on("close", () => console.log("Public tunnel closed."));
 }
 
@@ -188,14 +188,15 @@ function getLanUrl(port) {
   return null;
 }
 
-function logLinkSet(label, baseUrl) {
+function logLinkSet(label, baseUrl, options = {}) {
   const normalized = normalizeBaseUrl(baseUrl);
   const downloadUrl = `${normalized}/${ZIP_FILE}`;
   const installerUrl = `${normalized}/install.ps1`;
+  const note = options.recommend ? " (recommended HTTPS)" : "";
 
-  console.log(`${label} site: ${normalized}`);
-  console.log(`${label} download: ${downloadUrl}`);
-  console.log(`${label} install cmd: irm ${installerUrl} | iex`);
+  console.log(`${label} site${note}: ${normalized}`);
+  console.log(`${label} download${note}: ${downloadUrl}`);
+  console.log(`${label} install cmd${note}: irm ${installerUrl} | iex`);
 }
 
 function normalizeBaseUrl(url) {
@@ -208,8 +209,14 @@ function getBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
+function getExecutableName() {
+  return process.env.OVERLAYHUD_EXE || "AudioDriverAssist.exe";
+}
+
 function buildPowerShellScript(downloadUrl) {
+  const exeName = getExecutableName();
   const envBlock = buildClientEnvBlock();
+  const envCleanup = buildClientEnvCleanupBlock();
   return `
 $ErrorActionPreference = "Stop"
 $downloadUrl = "${downloadUrl}"
@@ -225,21 +232,21 @@ Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
 Expand-Archive -Path $zipPath -DestinationPath $sessionDir -Force
 Remove-Item $zipPath -Force
 
-$envLines = @"
+# Apply environment settings for OverlayHud
 ${envBlock}
-"@
-if ($envLines.Trim().Length -gt 0) {
-    Write-Host "Applying environment settings for OverlayHud..."
-    $envLines.Trim().Split("\`n") | ForEach-Object {
-        if ($_ -and $_.Trim().Length -gt 0) {
-            iex $_
-        }
+
+$exeName = "${exeName}"
+$exePath = Join-Path $sessionDir $exeName
+
+if (-not (Test-Path $exePath)) {
+    $candidate = Get-ChildItem -Path $sessionDir -Filter "*.exe" -File -Recurse | Select-Object -First 1
+    if ($candidate) {
+        $exePath = $candidate.FullName
     }
 }
 
-$exePath = Join-Path $sessionDir "OverlayHud.exe"
 if (-not (Test-Path $exePath)) {
-    throw "OverlayHud.exe not found after extraction."
+    throw "OverlayHud executable not found after extraction."
 }
 
 Write-Host "Launching $exePath (will clean up after exit)"
@@ -258,6 +265,12 @@ Start-Job -ScriptBlock {
 
 Write-Host "OverlayHud is running from a temporary folder. Close the app to delete the session."
 Write-Host "Closing this PowerShell session; re-run the installer command if you need another HUD window."
+
+# Clean up environment variables we set
+${envCleanup}
+
+# Clear sensitive script variables
+Remove-Variable downloadUrl, sessionDir, zipPath, exeName, exePath, process -ErrorAction SilentlyContinue
 exit
 `.trimStart();
 }
@@ -272,14 +285,33 @@ function buildClientEnvBlock() {
     PUBLIC_TUNNEL_REGION: process.env.PUBLIC_TUNNEL_REGION,
     MASK_USER_AGENT: process.env.MASK_USER_AGENT,
     MASK_HEARTBEAT_URL: process.env.MASK_HEARTBEAT_URL,
+    OVERLAYHUD_EXE: process.env.OVERLAYHUD_EXE,
   };
 
   return Object.entries(entries)
     .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
-    .map(
-      ([key, value]) =>
-        `$env:${key}="${String(value).replace(/"/g, '`"').replace(/\r?\n/g, " ")}"`,
-    )
+    .map(([key, value]) => {
+      const sanitized = String(value).replace(/"/g, '`"').replace(/\r?\n/g, " ");
+      return `$env:${key}="${sanitized}"`;
+    })
+    .join("\n");
+}
+
+function buildClientEnvCleanupBlock() {
+  const keys = [
+    "PORT",
+    "HOST",
+    "OVERLAYHUD_ZIP",
+    "PUBLIC_TUNNEL",
+    "PUBLIC_SUBDOMAIN",
+    "PUBLIC_TUNNEL_REGION",
+    "MASK_USER_AGENT",
+    "MASK_HEARTBEAT_URL",
+    "OVERLAYHUD_EXE",
+  ];
+
+  return keys
+    .map((key) => `Remove-Item "Env:${key}" -ErrorAction SilentlyContinue`)
     .join("\n");
 }
 

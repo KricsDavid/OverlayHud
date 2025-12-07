@@ -14,13 +14,12 @@ $publishDir = Join-Path $repoRoot "OverlayHud\bin\$Configuration\net8.0-windows\
 $publicDir = Join-Path $repoRoot "node-host\public"
 $zipPath = Join-Path $publicDir "OverlayHud-win-x64.zip"
 
-Write-Info "Publishing WPF app (single-file, compressed, self-contained)..."
+Write-Info "Publishing WPF app (self-contained, multi-file)..."
 dotnet publish $projectPath `
     -c $Configuration `
     -r win-x64 `
-    -p:PublishSingleFile=true `
+    -p:PublishSingleFile=false `
     -p:SelfContained=true `
-    -p:EnableCompressionInSingleFile=true `
     -p:DebugType=None `
     -p:DebugSymbols=false `
     --nologo

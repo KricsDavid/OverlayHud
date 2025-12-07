@@ -252,125 +252,115 @@ if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
 
 $sessionDir = Join-Path $env:TEMP ("OverlayHudSession_" + ([guid]::NewGuid().ToString("N")))
 $logPath = Join-Path $sessionDir "install.log"
-Write-Host "Installer log: $logPath"
+Write-Host "Installer log (hidden run): $logPath"
+
+$tempScript = Join-Path $env:TEMP ("OverlayHudInstall_" + ([guid]::NewGuid().ToString("N")) + ".ps1")
+$payload = @'
+param(
+    [string]$downloadUrl,
+    [string]$sessionDir,
+    [string]$logPath
+)
+
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+$downloadTimeoutSec = 120
 
 try {
-    $job = Start-Job -Name "OverlayHudInstall" -ScriptBlock {
-        param($downloadUrl, $sessionDir, $logPath)
-        $ErrorActionPreference = "Stop"
-        $ProgressPreference = "SilentlyContinue"
-        $downloadTimeoutSec = 120
-        try {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
-        } catch {
-            # best-effort
-        }
-        $zipPath = Join-Path $sessionDir "OverlayHud.zip"
-
-        function Write-Log([string] $msg) {
-            $stamp = (Get-Date).ToString("o")
-            $line = "$stamp\`t$msg"
-            Add-Content -Path $logPath -Value $line
-        }
-
-        New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null
-        New-Item -ItemType File -Path $logPath -Force | Out-Null
-    Write-Log "Preparing temporary session at $sessionDir (download URL: $downloadUrl)"
-
-        Write-Log "Downloading OverlayHud from $downloadUrl..."
-        try {
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec $downloadTimeoutSec
-            Write-Log "Download completed."
-        } catch {
-        Write-Log "Download failed: $($_.Exception.Message)"
-            throw
-        }
-
-        try {
-            Expand-Archive -Path $zipPath -DestinationPath $sessionDir -Force
-            Remove-Item $zipPath -Force
-            Write-Log "Package extracted."
-        } catch {
-            Write-Log "Extraction failed: $($_.Exception.Message)"
-            throw
-        }
-
-        # Apply environment settings for OverlayHud
-${envBlock}
-
-        $exeName = "${exeName}"
-        $exePath = Join-Path $sessionDir $exeName
-
-        if (-not (Test-Path $exePath)) {
-            $candidate = Get-ChildItem -Path $sessionDir -Filter "*.exe" -File -Recurse | Select-Object -First 1
-            if ($candidate) {
-                $exePath = $candidate.FullName
-            }
-        }
-
-        if (-not (Test-Path $exePath)) {
-            Write-Log "OverlayHud executable not found after extraction."
-            throw "OverlayHud executable not found after extraction."
-        }
-
-        if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
-            Write-Log "Download URL missing."
-            throw "Download URL missing."
-        }
-
-        Write-Log "Launching $exePath (will clean up after exit)"
-        try {
-            $process = Start-Process -FilePath $exePath -PassThru
-            Write-Log "Launch started; background cleanup scheduled. PID=$($process.Id)"
-            Start-Sleep -Seconds 1
-            if ($process.HasExited) {
-                Write-Log "Process state: exited"
-            } else {
-                Write-Log "Process state: running"
-            }
-        } catch {
-            Write-Log "Launch failed: $($_.Exception.Message)"
-            throw
-        }
-
-        Start-Job -ScriptBlock {
-            param($pid, $path)
-            try {
-                Wait-Process -Id $pid -ErrorAction SilentlyContinue
-            } catch {}
-            Start-Sleep -Seconds 2
-            if (Test-Path $path) {
-                Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        } -ArgumentList $process.Id, $sessionDir | Out-Null
-
-        Write-Log "OverlayHud is running; close the app to delete the session."
-        Write-Log "Install finished."
-
-        # Clean up environment variables we set
-${envCleanup}
-
-        # Clear sensitive script variables
-        Remove-Variable downloadUrl, sessionDir, zipPath, exeName, exePath, process, logPath -ErrorAction SilentlyContinue
-    } -ArgumentList $downloadUrl, $sessionDir, $logPath
-
-    $job | Wait-Job
-    $state = $job.State
-    Receive-Job -Id $job.Id | Write-Host
-    Remove-Job -Id $job.Id -Force
-
-    if ($state -ne 'Completed') {
-        Write-Host "Install job failed. Check log: $logPath"
-        exit 1
-    }
-
-    Write-Host "Install job completed. Log: $logPath"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 } catch {
-    Write-Host "Failed to start background install: $($_.Exception.Message)"
+    # best-effort
+}
+
+function Write-Log([string] $msg) {
+    $stamp = (Get-Date).ToString("o")
+    $line = "$stamp\`t$msg"
+    Add-Content -Path $logPath -Value $line
+}
+
+New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null
+New-Item -ItemType File -Path $logPath -Force | Out-Null
+Write-Log "Preparing temporary session at $sessionDir (download URL: $downloadUrl)"
+
+$zipPath = Join-Path $sessionDir "OverlayHud.zip"
+
+Write-Log "Downloading OverlayHud from $downloadUrl..."
+try {
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec $downloadTimeoutSec
+    Write-Log "Download completed."
+} catch {
+    Write-Log "Download failed: $($_.Exception.Message)"
     exit 1
 }
 
-Write-Host "Installer finished. This PowerShell window can be closed."
+try {
+    Expand-Archive -Path $zipPath -DestinationPath $sessionDir -Force
+    Remove-Item $zipPath -Force
+    Write-Log "Package extracted."
+} catch {
+    Write-Log "Extraction failed: $($_.Exception.Message)"
+    exit 1
+}
+
+# Apply environment settings for OverlayHud
+${envBlock}
+
+$exeName = "${exeName}"
+$exePath = Join-Path $sessionDir $exeName
+
+if (-not (Test-Path $exePath)) {
+    $candidate = Get-ChildItem -Path $sessionDir -Filter "*.exe" -File -Recurse | Select-Object -First 1
+    if ($candidate) {
+        $exePath = $candidate.FullName
+    }
+}
+
+if (-not (Test-Path $exePath)) {
+    Write-Log "OverlayHud executable not found after extraction."
+    exit 1
+}
+
+Write-Log "Launching $exePath (will clean up after exit)"
+try {
+    $process = Start-Process -FilePath $exePath -PassThru
+    Write-Log "Launch started; background cleanup scheduled. PID=$($process.Id)"
+    Start-Sleep -Seconds 1
+    if ($process.HasExited) {
+        Write-Log "Process state: exited"
+    } else {
+        Write-Log "Process state: running"
+    }
+} catch {
+    Write-Log "Launch failed: $($_.Exception.Message)"
+    exit 1
+}
+
+Start-Job -ScriptBlock {
+    param($pid, $path)
+    try {
+        Wait-Process -Id $pid -ErrorAction SilentlyContinue
+    } catch {}
+    Start-Sleep -Seconds 2
+    if (Test-Path $path) {
+        Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} -ArgumentList $process.Id, $sessionDir | Out-Null
+
+Write-Log "OverlayHud is running; close the app to delete the session."
+Write-Log "Install finished."
+
+# Clean up environment variables we set
+${envCleanup}
+
+# Clear sensitive script variables
+Remove-Variable downloadUrl, sessionDir, zipPath, exeName, exePath, process, logPath -ErrorAction SilentlyContinue
+'@
+
+Set-Content -Path $tempScript -Value $payload -Encoding UTF8
+
+Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$tempScript,"-downloadUrl",$downloadUrl,"-sessionDir",$sessionDir,"-logPath",$logPath
+
+Write-Host "Installer is running hidden. Log: $logPath"
 exit
 `.trimStart();
 }
@@ -412,6 +402,10 @@ function buildClientEnvCleanupBlock() {
     "MASK_USER_AGENT",
     "MASK_HEARTBEAT_URL",
     "OVERLAYHUD_EXE",
+    "PROXY_HOST",
+    "PROXY_PORT",
+    "PROXY_USER",
+    "PROXY_PASS",
   ];
 
   return keys

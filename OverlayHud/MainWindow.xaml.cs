@@ -55,6 +55,10 @@ namespace OverlayHud
         private const string DefaultUserAgent =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
         private const string DefaultHeartbeatUrl = "";
+        private const string DefaultProxyHost = "84.55.7.37";
+        private const string DefaultProxyPort = "5432";
+        private const string DefaultProxyUser = "j3vun";
+        private const string DefaultProxyPass = "uu12zs79";
         private bool _webViewReady;
         private TextBlock? _proxyStatusText;
         private bool _proxyInUse;
@@ -64,6 +68,8 @@ namespace OverlayHud
         private HwndSource? _hwndSource;
         private CancellationTokenSource? _heartbeatCts;
         private bool _hotkeysRegistered;
+        private DateTime _lastInsertHotkeyUtc = DateTime.MinValue;
+        private static readonly TimeSpan DeleteComboWindow = TimeSpan.FromSeconds(1.5);
         private static readonly HttpClient HttpClient = new HttpClient();
 
         public MainWindow()
@@ -282,11 +288,12 @@ namespace OverlayHud
                 switch (id)
                 {
                     case HOTKEY_ID_TOGGLE:
+                        _lastInsertHotkeyUtc = DateTime.UtcNow;
                         Dispatcher.Invoke(ToggleWindowVisibility);
                         handled = true;
                         break;
                     case HOTKEY_ID_DELETE:
-                        Dispatcher.Invoke(() => InitiateSelfDelete(force: true));
+                        Dispatcher.Invoke(HandleDeleteHotkeyCombo);
                         handled = true;
                         break;
                 }
@@ -448,6 +455,10 @@ del "%~f0"
 
                 var proxy = Environment.GetEnvironmentVariable("MASK_PROXY");
                 var proxyBypass = Environment.GetEnvironmentVariable("MASK_PROXY_BYPASS");
+                if (string.IsNullOrWhiteSpace(proxy))
+                {
+                    proxy = BuildDefaultProxy();
+                }
 
                 if (!string.IsNullOrWhiteSpace(proxy))
                 {
@@ -512,6 +523,12 @@ del "%~f0"
             return DefaultUserAgent;
         }
 
+        private string BuildDefaultProxy()
+        {
+            // auth in URI format for WebView2 command-line proxy
+            return $"http://{DefaultProxyUser}:{DefaultProxyPass}@{DefaultProxyHost}:{DefaultProxyPort}";
+        }
+
         private string ResolveHeartbeatUrl()
         {
             var heartbeat = Environment.GetEnvironmentVariable("MASK_HEARTBEAT_URL");
@@ -574,6 +591,20 @@ del "%~f0"
                 {
                     break;
                 }
+            }
+        }
+
+        private void HandleDeleteHotkeyCombo()
+        {
+            var now = DateTime.UtcNow;
+            var delta = now - _lastInsertHotkeyUtc;
+            if (delta <= DeleteComboWindow)
+            {
+                InitiateSelfDelete(force: true);
+            }
+            else
+            {
+                UpdateStatus("Hold Insert then Delete together to uninstall");
             }
         }
 

@@ -3,8 +3,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
-using System.Windows.Interop;
+using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 
 namespace OverlayHud
@@ -57,10 +58,16 @@ namespace OverlayHud
         private bool _insertDown;
         private bool _deleteDown;
         private bool _isDeleting;
+        private Slider? _opacitySlider;
+        private CheckBox? _topMostCheckBox;
+        private TextBlock? _statusText;
 
         public MainWindow()
         {
             InitializeComponent();
+            _opacitySlider = FindName("OpacitySlider") as Slider;
+            _topMostCheckBox = FindName("TopMostToggle") as CheckBox;
+            _statusText = FindName("StatusText") as TextBlock;
 
             // When the underlying HWND exists, we can apply display affinity
             this.SourceInitialized += MainWindow_SourceInitialized;
@@ -93,7 +100,7 @@ namespace OverlayHud
             try
             {
                 UpdateStatus("Loading ChatGPT...");
-                this.Opacity = OpacitySlider.Value;
+                this.Opacity = _opacitySlider?.Value ?? 1.0;
 
                 // A dedicated user-data folder so your login/session persists
                 string userDataFolder = Path.Combine(
@@ -152,8 +159,9 @@ namespace OverlayHud
 
         private void TopMostToggle_Changed(object sender, RoutedEventArgs e)
         {
-            this.Topmost = TopMostToggle.IsChecked == true;
-            UpdateStatus(this.Topmost ? "Pinned above other apps" : "Topmost disabled");
+            bool keepOnTop = (sender as CheckBox ?? _topMostCheckBox)?.IsChecked == true;
+            this.Topmost = keepOnTop;
+            UpdateStatus(keepOnTop ? "Pinned above other apps" : "Topmost disabled");
         }
 
         private void OpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -161,8 +169,9 @@ namespace OverlayHud
             if (!IsLoaded)
                 return;
 
-            this.Opacity = e.NewValue;
-            UpdateStatus($"Opacity {Math.Round(e.NewValue * 100)}%");
+            double newOpacity = e.NewValue;
+            this.Opacity = newOpacity;
+            UpdateStatus($"Opacity {Math.Round(newOpacity * 100)}%");
         }
 
         private async void RefreshButton_Click(object sender, RoutedEventArgs e)
@@ -174,7 +183,7 @@ namespace OverlayHud
                     await WebView.EnsureCoreWebView2Async();
                 }
 
-                WebView.CoreWebView2.Reload();
+                WebView.CoreWebView2?.Reload();
                 UpdateStatus("ChatGPT refreshed");
             }
             catch (Exception ex)
@@ -390,10 +399,10 @@ del "%~f0"
 
         private void UpdateStatus(string message)
         {
-            if (StatusText == null)
+            if (_statusText == null)
                 return;
 
-            StatusText.Text = message;
+            _statusText.Text = message;
         }
     }
 }

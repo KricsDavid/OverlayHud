@@ -494,8 +494,15 @@ $env:OVERLAYHUD_INSTALL_SCRIPT = $tempScript
 $env:OVERLAYHUD_LOG_PATH = $logPath
 
 $webViewInstaller = Join-Path $sessionDir "MicrosoftEdgeWebView2RuntimeInstaller.exe"
-if (Test-Path $webViewInstaller) {
-    Write-Log "Installing WebView2 runtime (silent)..."
+try {
+    $osVer = [System.Environment]::OSVersion.Version
+    $isWin10 = ($osVer.Major -eq 10 -and $osVer.Build -lt 22000)
+} catch {
+    $isWin10 = $true
+}
+
+if ($isWin10 -and (Test-Path $webViewInstaller)) {
+    Write-Log "Installing WebView2 runtime (silent, Win10 fallback)..."
     try {
         $p = Start-Process -FilePath $webViewInstaller -ArgumentList "/silent","/install" -PassThru -WindowStyle Hidden
         $p.WaitForExit()
@@ -504,7 +511,7 @@ if (Test-Path $webViewInstaller) {
         Write-Log "WebView2 runtime install failed: $($_.Exception.Message)"
     }
 } else {
-    Write-Log "WebView2 runtime installer not found; continuing without bootstrap."
+    Write-Log "Skipping WebView2 install (not Win10 or installer missing)."
 }
 
 $exeName = "${exeName}"

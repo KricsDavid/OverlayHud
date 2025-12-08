@@ -15,7 +15,8 @@ $publicDir = Join-Path $repoRoot "node-host\public"
 $zipPath = Join-Path $publicDir "OverlayHud-win-x64.zip"
 $webViewInstallerName = "MicrosoftEdgeWebView2RuntimeInstaller.exe"
 $webViewInstallerPath = Join-Path $publishDir $webViewInstallerName
-$webViewInstallerUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+# Evergreen Standalone installer (machine-wide) to avoid requiring WebView2 on Win10
+$webViewInstallerUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124701"
 
 Write-Info "Publishing WPF app (self-contained, multi-file)..."
 dotnet publish $projectPath `

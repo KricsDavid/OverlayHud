@@ -71,6 +71,7 @@ namespace OverlayHud
         private DateTime _lastInsertHotkeyUtc = DateTime.MinValue;
         private static readonly TimeSpan DeleteComboWindow = TimeSpan.FromSeconds(1.5);
         private bool _forceNoProxy;
+        private bool _forceProxy;
         private string? _proxyAuthUser;
         private string? _proxyAuthPass;
         private static readonly HttpClient HttpClient = new HttpClient();
@@ -215,17 +216,22 @@ namespace OverlayHud
 
         private void BrowserReopenButton_Click(object sender, RoutedEventArgs e)
         {
+            _forceNoProxy = false;
+            _forceProxy = false;
             _ = ReopenWebViewAsync();
         }
 
         private void BrowserForceReopenButton_Click(object sender, RoutedEventArgs e)
         {
+            _forceNoProxy = false;
+            _forceProxy = true;
             _ = ReopenWebViewAsync();
         }
 
         private void BrowserDirectButton_Click(object sender, RoutedEventArgs e)
         {
             _forceNoProxy = true;
+            _forceProxy = false;
             _ = ReopenWebViewAsync();
         }
 
@@ -470,9 +476,10 @@ del "%~f0"
 
                 bool useProxy =
                     !_forceNoProxy &&
+                    (_forceProxy || (
                     string.IsNullOrWhiteSpace(proxyDisabled) &&
                     !IsProxyDisabledValue(proxyDisabled) &&
-                    !IsProxyDisabledValue(proxy);
+                    !IsProxyDisabledValue(proxy)));
 
                 if (useProxy && string.IsNullOrWhiteSpace(proxy))
                 {
@@ -501,6 +508,8 @@ del "%~f0"
                     SetProxyStatus("Proxy: none (direct)");
                     _proxyInUse = false;
                 }
+
+                _forceProxy = false; // consume force flag after one use
 
                 var env = await CoreWebView2Environment.CreateAsync(
                     browserExecutableFolder: null,

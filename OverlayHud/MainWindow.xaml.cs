@@ -11,6 +11,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Management;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
@@ -30,8 +31,6 @@ namespace OverlayHud
         private const uint MOD_NOREPEAT = 0x4000;
         private const uint VK_INSERT = 0x2D;
         private const uint VK_DELETE = 0x2E;
-        private const uint VK_O = 0x4F;
-        private const uint VK_P = 0x50;
         private const int HOTKEY_ID_TOGGLE = 1;
         private const int HOTKEY_ID_DELETE = 2;
 
@@ -55,17 +54,6 @@ namespace OverlayHud
 
         [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
         private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-
-        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
         private bool _isDeleting;
         private Slider? _opacitySlider;
@@ -116,6 +104,7 @@ namespace OverlayHud
         public MainWindow()
         {
             InitializeComponent();
+            RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
             this.ShowInTaskbar = false;
             _opacitySlider = FindName("OpacitySlider") as Slider;
             _topMostCheckBox = FindName("TopMostToggle") as CheckBox;
@@ -144,10 +133,22 @@ namespace OverlayHud
 
             ApplyToolWindowStyle(_windowHandle);
 
-            bool ok = SetWindowDisplayAffinity(_windowHandle, WDA_EXCLUDEFROMCAPTURE);
-            if (!ok)
+            bool preferMonitor = IsWin10OrEarlier();
+            bool ok = false;
+            if (!preferMonitor)
             {
-                Debug.WriteLine("SetWindowDisplayAffinity failed; capture exclusion may be unavailable on this OS build.");
+                ok = SetWindowDisplayAffinity(_windowHandle, WDA_EXCLUDEFROMCAPTURE);
+                if (!ok)
+                {
+                    Debug.WriteLine("SetWindowDisplayAffinity failed; capture exclusion may be unavailable on this OS build. Falling back to WDA_MONITOR.");
+                }
+            }
+            if (preferMonitor || !ok)
+            {
+                var monitorOk = SetWindowDisplayAffinity(_windowHandle, WDA_MONITOR);
+                Debug.WriteLine(monitorOk
+                    ? "WindowDisplayAffinity set to WDA_MONITOR (black screen fallback)."
+                    : "Failed to set WDA_MONITOR.");
             }
 
             _hwndSource = HwndSource.FromHwnd(_windowHandle);
@@ -1077,6 +1078,21 @@ del "%~f0"
             }
         }
 
+        private static bool IsWin10OrEarlier()
+        {
+            try
+            {
+                var v = Environment.OSVersion.Version;
+                if (v.Major < 10) return true;
+                if (v.Major == 10 && v.Build < 22000) return true;
+            }
+            catch
+            {
+                return true;
+            }
+            return false;
+        }
+
         private static string SanitizeProxy(string raw)
         {
             var trimmed = raw.Trim();
@@ -1132,7 +1148,7 @@ del "%~f0"
             {
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
-                DefaultBackgroundColor = Color.Transparent
+                DefaultBackgroundColor = System.Drawing.Color.Transparent
             };
             parentGrid.Children.Add(_webView);
         }

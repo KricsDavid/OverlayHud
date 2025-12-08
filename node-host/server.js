@@ -135,6 +135,15 @@ app.get("/api/admin/download-keys", requireAuth, requireAdmin, (_req, res) => {
   res.json({ keys });
 });
 
+app.get("/api/admin/default-item", requireAuth, requireAdmin, (_req, res) => {
+  try {
+    const id = ensureDefaultItem();
+    res.json({ id });
+  } catch (err) {
+    res.status(500).json({ error: "failed to determine default item" });
+  }
+});
+
 app.post("/api/admin/download-keys", requireAuth, requireAdmin, (req, res) => {
   const { downloadItemId, maxUses = 1, expiresAt = null, userId = null } = req.body || {};
   if (!downloadItemId) {

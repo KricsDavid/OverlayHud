@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "cross-env PORT=8080 HOST=0.0.0.0 node server.js",
     "start:public": "cross-env PUBLIC_TUNNEL=true node server.js",
-    "start:public-sub": "cross-env PUBLIC_TUNNEL=true PUBLIC_SUBDOMAIN=overlayhud node server.js"
+    "start:public-sub": "cross-env PUBLIC_TUNNEL=true PUBLIC_SUBDOMAIN=overlayhud node server.js",
+    "start:all": "node startall.js"
   },
   "keywords": [
     "overlayhud",

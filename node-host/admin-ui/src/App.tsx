@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ShieldCheck, Link2, Moon, Sun, KeyRound, RefreshCw, Copy } from "lucide-react";
 import { applyTheme, getInitialTheme, Theme } from "./theme";
-import { createItem, createKey, fetchItems, fetchKeys, DownloadItem, DownloadKey } from "./api";
+import { createItem, createKey, fetchItems, fetchKeys, fetchDefaultItemId, DownloadItem, DownloadKey } from "./api";
 
 type Mode = "items" | "keys";
 
@@ -12,6 +12,7 @@ function App() {
   const [mode, setMode] = useState<Mode>("items");
   const [items, setItems] = useState<DownloadItem[]>([]);
   const [keys, setKeys] = useState<DownloadKey[]>([]);
+  const [defaultItemId, setDefaultItemId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newItem, setNewItem] = useState({ name: "", filePath: "", priceCents: 0 });
@@ -41,6 +42,17 @@ function App() {
       setError(res.error);
     } else {
       setItems(res.data);
+    }
+  };
+
+  const loadDefaultItem = async () => {
+    if (!authSet) return;
+    const res = await fetchDefaultItemId(baseUrl, token);
+    if (res.ok) {
+      setDefaultItemId(res.data);
+      if (!newKey.downloadItemId) {
+        setNewKey((prev) => ({ ...prev, downloadItemId: res.data }));
+      }
     }
   };
 
@@ -74,6 +86,7 @@ function App() {
     } else {
       setNewItem({ name: "", filePath: "", priceCents: 0 });
       loadItems();
+      loadDefaultItem();
     }
   };
 
@@ -84,8 +97,13 @@ function App() {
     }
     setLoading(true);
     setError(null);
+    const targetId = Number(newKey.downloadItemId || defaultItemId);
+    if (!targetId) {
+      setError("Default item not available; create an item first");
+      return;
+    }
     const res = await createKey(baseUrl, token, {
-      downloadItemId: Number(newKey.downloadItemId),
+      downloadItemId: targetId,
       maxUses: Number(newKey.maxUses) || 1,
       expiresAt: newKey.expiresAt || null,
     });
@@ -93,7 +111,7 @@ function App() {
     if (!res.ok) {
       setError(res.error);
     } else {
-      setNewKey({ downloadItemId: 0, maxUses: 1, expiresAt: "" });
+      setNewKey({ downloadItemId: defaultItemId ?? 0, maxUses: 1, expiresAt: "" });
       loadKeys();
       navigator.clipboard?.writeText(res.data.key).catch(() => {});
     }
@@ -157,7 +175,7 @@ function App() {
               <button className="btn secondary" onClick={savePrefs}>
                 Save
               </button>
-              <button className="btn" onClick={mode === "items" ? loadItems : loadKeys}>
+              <button className="btn" onClick={mode === "items" ? loadItems : () => { loadDefaultItem(); loadKeys(); }}>
                 <RefreshCw size={16} />
                 Refresh {mode === "items" ? "Items" : "Keys"}
               </button>
@@ -266,9 +284,22 @@ function App() {
                 value={newKey.expiresAt}
                 onChange={(e) => setNewKey({ ...newKey, expiresAt: e.target.value })}
               />
-              <button className="btn" onClick={handleCreateKey} disabled={loading}>
-                Create Key
-              </button>
+              <div className="flex wrap">
+                <button className="btn" onClick={handleCreateKey} disabled={loading}>
+                  Create Key
+                </button>
+                <button
+                  className="btn secondary"
+                  onClick={() => {
+                    if (defaultItemId) {
+                      setNewKey((prev) => ({ ...prev, downloadItemId: defaultItemId }));
+                    }
+                  }}
+                  disabled={!defaultItemId}
+                >
+                  Use Default Item {defaultItemId ?? ""}
+                </button>
+              </div>
             </div>
           </div>
           <div className="card">

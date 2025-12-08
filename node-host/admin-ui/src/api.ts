@@ -78,6 +78,19 @@ export async function fetchKeys(baseUrl: string, token: string): Promise<ApiResu
   }
 }
 
+export async function fetchDefaultItemId(baseUrl: string, token: string): Promise<ApiResult<number>> {
+  try {
+    const res = await fetch(`${baseUrl}/api/admin/default-item`, {
+      headers: authHeaders(token),
+    });
+    if (!res.ok) return { ok: false, error: await res.text() };
+    const json = await res.json();
+    return { ok: true, data: json.id as number };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "Network error" };
+  }
+}
+
 export async function createKey(
   baseUrl: string,
   token: string,

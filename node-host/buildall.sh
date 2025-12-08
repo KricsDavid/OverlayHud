@@ -8,13 +8,9 @@ echo "[buildall] Ensuring base packages (nginx, node, npm, curl, rsync, zip, unz
 sudo apt update
 sudo apt install -y nginx nodejs npm curl rsync zip unzip screen
 
-if [ -d "$ROOT/.git" ]; then
-  echo "[buildall] Pulling latest from git..."
-  cd "$ROOT"
-  git pull --rebase || true
-else
-  echo "[buildall] WARNING: No .git directory found at $ROOT; skipping git pull."
-fi
+echo "[buildall] Pulling latest from git..."
+cd "$ROOT"
+git pull --rebase || true
 
 echo "[buildall] Building admin UI..."
 cd "$ROOT/node-host/admin-ui"

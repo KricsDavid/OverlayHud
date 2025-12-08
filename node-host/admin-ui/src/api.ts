@@ -115,3 +115,22 @@ export async function createKey(
   }
 }
 
+export async function login(
+  baseUrl: string,
+  email: string,
+  password: string,
+): Promise<ApiResult<{ token: string; user: { email: string; role: string } }>> {
+  try {
+    const res = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!res.ok) return { ok: false, error: await res.text() };
+    const json = await res.json();
+    return { ok: true, data: json };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "Network error" };
+  }
+}
+

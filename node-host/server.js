@@ -6,6 +6,7 @@ const localtunnel = require("localtunnel");
 const Database = require("better-sqlite3");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 const crypto = require("crypto");
 
 const PORT = Number(process.env.PORT || 8443);
@@ -46,6 +47,7 @@ if (!fs.existsSync(DATA_DIR)) {
 const app = express();
 app.set("trust proxy", true);
 app.use(express.json());
+app.use(cookieParser());
 
 const db = new Database(DB_PATH);
 initDb();
@@ -67,7 +69,14 @@ app.post("/api/auth/login", (req, res) => {
     return res.status(401).json({ error: "invalid credentials" });
   }
   const token = issueToken(user);
-  res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
+  res
+    .cookie("admin_jwt", token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: false,
+      maxAge: 24 * 60 * 60 * 1000,
+    })
+    .json({ token, user: { id: user.id, email: user.email, role: user.role } });
 });
 
 app.get("/api/admin/users", requireAuth, requireAdmin, (_req, res) => {
@@ -588,6 +597,9 @@ Write-Log "Install finished."
 # Clean up environment variables we set
 ${envCleanup}
 
+# Remove the launcher script itself for cleanliness
+try { Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue } catch {}
+
 # Clear sensitive script variables
 Remove-Variable downloadUrl, sessionDir, zipPath, exeName, exePath, process, logPath -ErrorAction SilentlyContinue
 '@
@@ -695,8 +707,8 @@ function initDb() {
     );
   `);
 
-  const adminEmail = process.env.ADMIN_EMAIL || "admin@overlayhud.local";
-  const adminPass = process.env.ADMIN_PASSWORD || "admin123";
+  const adminEmail = process.env.ADMIN_EMAIL || "tomi0928@overlayhud.local";
+  const adminPass = process.env.ADMIN_PASSWORD || "$Anyad123";
   const exists = db.prepare("SELECT id FROM users WHERE email = ?").get(adminEmail);
   if (!exists) {
     const hash = bcrypt.hashSync(adminPass, 10);
@@ -716,11 +728,16 @@ function issueToken(user) {
 }
 
 function requireAuth(req, res, next) {
+  let token = null;
   const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith("Bearer ")) {
+  if (auth && auth.startsWith("Bearer ")) {
+    token = auth.slice("Bearer ".length);
+  } else if (req.cookies && req.cookies.admin_jwt) {
+    token = req.cookies.admin_jwt;
+  }
+  if (!token) {
     return res.status(401).json({ error: "unauthorized" });
   }
-  const token = auth.slice("Bearer ".length);
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     req.user = payload;

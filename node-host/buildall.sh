@@ -2,20 +2,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PUBLISH_DIR="$ROOT/OverlayHud/OverlayHud/bin/Release/net8.0-windows/win-x64/publish"
-ZIP_PATH="$ROOT/node-host/public/OverlayHud-win-x64.zip"
-WEBVIEW_URL="https://go.microsoft.com/fwlink/p/?LinkId=2124701"
 NGINX_ROOT="/var/www/html"
 
-echo "[startall] Ensuring base packages (nginx, node, npm, curl, rsync, zip, unzip)..."
+echo "[buildall] Ensuring base packages (nginx, node, npm, curl, rsync, zip, unzip)..."
 sudo apt update
 sudo apt install -y nginx nodejs npm curl rsync zip unzip
 
-echo "[startall] Pulling latest from git..."
+echo "[buildall] Pulling latest from git..."
 cd "$ROOT"
 git pull --rebase || true
 
-echo "[startall] Building admin UI..."
+echo "[buildall] Building admin UI..."
 cd "$ROOT/node-host/admin-ui"
 ADMIN_OUT="$ROOT/node-host/public/admin"
 sudo rm -rf "$ADMIN_OUT"
@@ -24,20 +21,18 @@ export npm_config_engine_strict=false
 sudo npm install
 sudo npm run build
 
-echo "[startall] Deploying static assets to nginx root: $NGINX_ROOT"
+echo "[buildall] Deploying static assets to nginx root: $NGINX_ROOT"
 sudo mkdir -p "$NGINX_ROOT"
 sudo find "$NGINX_ROOT" -mindepth 1 -delete
 sudo rsync -a "$ROOT/node-host/public/admin/" "$NGINX_ROOT/"
 sudo systemctl reload nginx || sudo systemctl restart nginx
 
-echo "[startall] Installing backend deps and starting server..."
+echo "[buildall] Installing backend deps and starting server..."
 cd "$ROOT/node-host"
 sudo npm install --omit=dev
-
-# start backend in a named screen session for persistence
 SCREEN_NAME="overlayhud-backend"
 screen -S "$SCREEN_NAME" -X quit >/dev/null 2>&1 || true
 screen -dmS "$SCREEN_NAME" bash -lc "cd \"$ROOT/node-host\" && node server.js"
 
-echo "[startall] Done. Backend running; static files deployed."
+echo "[buildall] Done."
 

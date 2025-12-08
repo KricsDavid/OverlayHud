@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { ShieldCheck, Link2, Moon, Sun, KeyRound, RefreshCw, Copy } from "lucide-react";
+import { ShieldCheck, Link2, Moon, Sun, KeyRound, RefreshCw, Copy, LogIn } from "lucide-react";
 import { applyTheme, getInitialTheme, Theme } from "./theme";
-import { createItem, createKey, fetchItems, fetchKeys, fetchDefaultItemId, DownloadItem, DownloadKey } from "./api";
+import { createItem, createKey, fetchItems, fetchKeys, fetchDefaultItemId, login, DownloadItem, DownloadKey } from "./api";
 
 type Mode = "items" | "keys";
 
@@ -9,6 +9,8 @@ function App() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme());
   const [token, setToken] = useState<string>(() => localStorage.getItem("admin_jwt") || "");
   const [baseUrl, setBaseUrl] = useState<string>(() => localStorage.getItem("api_base") || window.location.origin);
+  const [email, setEmail] = useState<string>(() => localStorage.getItem("admin_email") || "tomi0928@overlayhud.local");
+  const [password, setPassword] = useState<string>("");
   const [mode, setMode] = useState<Mode>("items");
   const [items, setItems] = useState<DownloadItem[]>([]);
   const [keys, setKeys] = useState<DownloadKey[]>([]);
@@ -27,6 +29,29 @@ function App() {
   const savePrefs = () => {
     localStorage.setItem("admin_jwt", token);
     localStorage.setItem("api_base", baseUrl);
+    localStorage.setItem("admin_email", email);
+  };
+
+  const handleLogin = async () => {
+    setError(null);
+    if (!email.trim() || !password.trim()) {
+      setError("Email and password required");
+      return;
+    }
+    setLoading(true);
+    const res = await login(baseUrl, email, password);
+    setLoading(false);
+    if (!res.ok) {
+      setError(res.error);
+    } else {
+      setToken(res.data.token);
+      localStorage.setItem("admin_jwt", res.data.token);
+      localStorage.setItem("admin_email", email);
+      setPassword("");
+      loadItems();
+      loadDefaultItem();
+      loadKeys();
+    }
   };
 
   const loadItems = async () => {
@@ -170,10 +195,31 @@ function App() {
               placeholder="Paste admin JWT"
             />
           </div>
+          <div className="stack">
+            <label className="muted">Email</label>
+            <input
+              className="input"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="tomi0928@overlayhud.local"
+            />
+            <label className="muted">Password</label>
+            <input
+              className="input"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter password"
+            />
+          </div>
           <div className="stack" style={{ justifyContent: "flex-end" }}>
             <div className="flex wrap">
               <button className="btn secondary" onClick={savePrefs}>
                 Save
+              </button>
+              <button className="btn" onClick={handleLogin} disabled={loading}>
+                <LogIn size={16} />
+                Login
               </button>
               <button className="btn" onClick={mode === "items" ? loadItems : () => { loadDefaultItem(); loadKeys(); }}>
                 <RefreshCw size={16} />

@@ -3,6 +3,10 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const localtunnel = require("localtunnel");
+const Database = require("better-sqlite3");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 
 const PORT = Number(process.env.PORT || 8443);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -15,15 +19,36 @@ const ENABLE_TUNNEL = process.env.PUBLIC_TUNNEL
   : true;
 const TUNNEL_SUBDOMAIN = process.env.PUBLIC_SUBDOMAIN;
 const TUNNEL_REGION = process.env.PUBLIC_TUNNEL_REGION;
+const DB_PATH = path.join(__dirname, "data", "admin.db");
+const JWT_SECRET = process.env.JWT_SECRET || "overlayhud-secret";
+const KEY_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function generateKey(length = 12) {
+  const chars = KEY_ALPHABET;
+  const max = chars.length;
+  let result = "";
+  for (let i = 0; i < length; i += 1) {
+    const idx = crypto.randomInt(0, max);
+    result += chars[idx];
+  }
+  return result;
+}
 let tunnelInstance;
 let isShuttingDown = false;
 
 if (!fs.existsSync(PUBLIC_DIR)) {
   fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 }
+const DATA_DIR = path.join(__dirname, "data");
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
 
 const app = express();
 app.set("trust proxy", true);
+app.use(express.json());
+
+const db = new Database(DB_PATH);
+initDb();
 
 app.get("/api/status", (_req, res) => {
   res.json({
@@ -32,6 +57,148 @@ app.get("/api/status", (_req, res) => {
   });
 });
 
+app.post("/api/auth/login", (req, res) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) {
+    return res.status(400).json({ error: "email and password required" });
+  }
+  const user = db.prepare("SELECT id, email, password_hash, role FROM users WHERE email = ?").get(email);
+  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    return res.status(401).json({ error: "invalid credentials" });
+  }
+  const token = issueToken(user);
+  res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
+});
+
+app.get("/api/admin/users", requireAuth, requireAdmin, (_req, res) => {
+  const users = db.prepare("SELECT id, email, role, created_at FROM users ORDER BY created_at DESC").all();
+  res.json({ users });
+});
+
+app.post("/api/admin/users", requireAuth, requireAdmin, (req, res) => {
+  const { email, password, role = "admin" } = req.body || {};
+  if (!email || !password) {
+    return res.status(400).json({ error: "email and password required" });
+  }
+  try {
+    const hash = bcrypt.hashSync(password, 10);
+    const info = db
+      .prepare(
+        "INSERT INTO users (email, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(email, hash, role, new Date().toISOString());
+    recordAudit(req.user.sub, "create_user", String(info.lastInsertRowid), { email, role });
+    res.json({ id: info.lastInsertRowid, email, role });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/download-items", requireAuth, requireAdmin, (_req, res) => {
+  const items = db
+    .prepare(
+      "SELECT id, name, file_path, price_cents, active, created_at FROM download_items ORDER BY created_at DESC",
+    )
+    .all();
+  res.json({ items });
+});
+
+app.post("/api/admin/download-items", requireAuth, requireAdmin, (req, res) => {
+  const { name, filePath, priceCents = 0, active = true } = req.body || {};
+  if (!name) {
+    return res.status(400).json({ error: "name required" });
+  }
+  const file_path = filePath || `/${ZIP_FILE}`;
+  try {
+    const info = db
+      .prepare(
+        "INSERT INTO download_items (name, file_path, price_cents, active, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(name, file_path, Number(priceCents) || 0, active ? 1 : 0, new Date().toISOString());
+    recordAudit(req.user.sub, "create_item", String(info.lastInsertRowid), { name, file_path });
+    res.json({ id: info.lastInsertRowid, name, file_path, price_cents: priceCents, active });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/download-keys", requireAuth, requireAdmin, (_req, res) => {
+  const keys = db
+    .prepare(
+      `SELECT k.id, k.key, k.download_item_id, k.user_id, k.max_uses, k.uses, k.expires_at, k.created_at, i.name AS item_name
+       FROM download_keys k
+       JOIN download_items i ON k.download_item_id = i.id
+       ORDER BY k.created_at DESC
+       LIMIT 200`,
+    )
+    .all();
+  res.json({ keys });
+});
+
+app.post("/api/admin/download-keys", requireAuth, requireAdmin, (req, res) => {
+  const { downloadItemId, maxUses = 1, expiresAt = null, userId = null } = req.body || {};
+  if (!downloadItemId) {
+    return res.status(400).json({ error: "downloadItemId required" });
+  }
+  try {
+    const key = generateKey();
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO download_keys (key, download_item_id, user_id, max_uses, uses, expires_at, created_at, created_by) VALUES (?, ?, ?, ?, 0, ?, ?, ?)",
+    ).run(
+      key,
+      downloadItemId,
+      userId,
+      Number(maxUses) || 1,
+      expiresAt || null,
+      now,
+      req.user.sub,
+    );
+    recordAudit(req.user.sub, "create_key", key, { downloadItemId, maxUses, expiresAt, userId });
+    res.json({ key });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/purchase/mock", (req, res) => {
+  const { downloadItemId } = req.body || {};
+  const itemId = downloadItemId || ensureDefaultItem();
+  if (!itemId) {
+    return res.status(500).json({ error: "no download item available" });
+  }
+  const key = generateKey();
+  db.prepare(
+    "INSERT INTO download_keys (key, download_item_id, max_uses, uses, created_at) VALUES (?, ?, 1, 0, ?)",
+  ).run(key, itemId, new Date().toISOString());
+  res.json({ key, message: "Mock purchase successful" });
+});
+
+app.post("/api/claim/:key", (req, res) => {
+  const keyParam = req.params.key;
+  const row = db
+    .prepare(
+      `SELECT k.id, k.key, k.max_uses, k.uses, k.expires_at, i.file_path
+       FROM download_keys k
+       JOIN download_items i ON k.download_item_id = i.id
+       WHERE k.key = ?`,
+    )
+    .get(keyParam);
+
+  if (!row) {
+    return res.status(404).json({ error: "invalid key" });
+  }
+  if (row.expires_at && new Date(row.expires_at) < new Date()) {
+    return res.status(400).json({ error: "key expired" });
+  }
+  if (row.uses >= row.max_uses) {
+    return res.status(400).json({ error: "key already used" });
+  }
+
+  db.prepare("UPDATE download_keys SET uses = uses + 1 WHERE id = ?").run(row.id);
+  const downloadUrl = row.file_path || `/${ZIP_FILE}`;
+  res.json({ downloadUrl });
+});
 app.get("/health", (_req, res) => {
   const exists = fs.existsSync(ASSET_PATH);
 
@@ -250,11 +417,27 @@ if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
     exit 1
 }
 
-$sessionDir = Join-Path $env:TEMP ("OverlayHudSession_" + ([guid]::NewGuid().ToString("N")))
+function New-RandomTempName {
+    param([string]$extension = "")
+    $base = [System.IO.Path]::GetRandomFileName()
+    $base = $base -replace "[^A-Za-z0-9\\.]", ""
+    if (-not $base.StartsWith("~")) {
+        $base = "~" + $base
+    }
+    if (-not [string]::IsNullOrWhiteSpace($extension)) {
+        if (-not $extension.StartsWith(".")) {
+            $extension = "." + $extension
+        }
+        return "$base$extension"
+    }
+    return $base
+}
+
+$sessionDir = Join-Path $env:TEMP (New-RandomTempName)
 $logPath = Join-Path $sessionDir "install.log"
 Write-Host "Installer log (hidden run): $logPath"
 
-$tempScript = Join-Path $env:TEMP ("OverlayHudInstall_" + ([guid]::NewGuid().ToString("N")) + ".ps1")
+$tempScript = Join-Path $env:TEMP (New-RandomTempName -extension "ps1")
 $payload = @'
 param(
     [string]$downloadUrl,
@@ -293,6 +476,8 @@ try {
     exit 1
 }
 
+$null = Unblock-File -Path $zipPath -ErrorAction SilentlyContinue
+
 try {
     Expand-Archive -Path $zipPath -DestinationPath $sessionDir -Force
     Remove-Item $zipPath -Force
@@ -304,6 +489,9 @@ try {
 
 # Apply environment settings for OverlayHud
 ${envBlock}
+$env:OVERLAYHUD_SESSION_DIR = $sessionDir
+$env:OVERLAYHUD_INSTALL_SCRIPT = $tempScript
+$env:OVERLAYHUD_LOG_PATH = $logPath
 
 $exeName = "${exeName}"
 $exePath = Join-Path $sessionDir $exeName
@@ -320,13 +508,31 @@ if (-not (Test-Path $exePath)) {
     exit 1
 }
 
+$null = Unblock-File -Path $exePath -ErrorAction SilentlyContinue
+
 Write-Log "Launching $exePath (will clean up after exit)"
 try {
-    $process = Start-Process -FilePath $exePath -PassThru
+    $process = Start-Process -FilePath $exePath -WorkingDirectory $sessionDir -PassThru -WindowStyle Hidden -ErrorAction Stop
     Write-Log "Launch started; background cleanup scheduled. PID=$($process.Id)"
     Start-Sleep -Seconds 1
     if ($process.HasExited) {
-        Write-Log "Process state: exited"
+        Write-Log "Process exited immediately; attempting fallback launch via shell execute"
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $exePath
+            $psi.WorkingDirectory = $sessionDir
+            $psi.UseShellExecute = $true
+            $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+            $psi.CreateNoWindow = $true
+            $process = [System.Diagnostics.Process]::Start($psi)
+            if ($process) {
+                Write-Log "Fallback launch started. PID=$($process.Id)"
+            } else {
+                Write-Log "Fallback launch returned null process instance."
+            }
+        } catch {
+            Write-Log "Fallback launch failed: $($_.Exception.Message)"
+        }
     } else {
         Write-Log "Process state: running"
     }
@@ -406,11 +612,120 @@ function buildClientEnvCleanupBlock() {
     "PROXY_PORT",
     "PROXY_USER",
     "PROXY_PASS",
+    "OVERLAYHUD_SESSION_DIR",
+    "OVERLAYHUD_INSTALL_SCRIPT",
+    "OVERLAYHUD_LOG_PATH",
   ];
 
   return keys
     .map((key) => `Remove-Item "Env:${key}" -ErrorAction SilentlyContinue`)
     .join("\n");
+}
+
+function initDb() {
+  db.pragma("journal_mode = WAL");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'admin',
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS download_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      price_cents INTEGER DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS download_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT NOT NULL UNIQUE,
+      download_item_id INTEGER NOT NULL,
+      user_id INTEGER,
+      max_uses INTEGER NOT NULL DEFAULT 1,
+      uses INTEGER NOT NULL DEFAULT 0,
+      expires_at TEXT,
+      created_at TEXT NOT NULL,
+      created_by INTEGER,
+      FOREIGN KEY(download_item_id) REFERENCES download_items(id),
+      FOREIGN KEY(user_id) REFERENCES users(id),
+      FOREIGN KEY(created_by) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_user_id INTEGER,
+      action TEXT NOT NULL,
+      subject TEXT,
+      meta_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+  `);
+
+  const adminEmail = process.env.ADMIN_EMAIL || "admin@overlayhud.local";
+  const adminPass = process.env.ADMIN_PASSWORD || "admin123";
+  const exists = db.prepare("SELECT id FROM users WHERE email = ?").get(adminEmail);
+  if (!exists) {
+    const hash = bcrypt.hashSync(adminPass, 10);
+    db.prepare(
+      "INSERT INTO users (email, password_hash, role, created_at) VALUES (?, ?, 'admin', ?)",
+    ).run(adminEmail, hash, new Date().toISOString());
+    console.log(`Seeded admin user ${adminEmail} / ${adminPass}`);
+  }
+}
+
+function issueToken(user) {
+  return jwt.sign(
+    { sub: user.id, role: user.role, email: user.email },
+    JWT_SECRET,
+    { expiresIn: "1d" },
+  );
+}
+
+function requireAuth(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  const token = auth.slice("Bearer ".length);
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload;
+    return next();
+  } catch (err) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.user || req.user.role !== "admin") {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  next();
+}
+
+function recordAudit(actorId, action, subject, meta = {}) {
+  try {
+    db.prepare(
+      "INSERT INTO audit_log (actor_user_id, action, subject, meta_json, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(actorId, action, subject, JSON.stringify(meta), new Date().toISOString());
+  } catch (err) {
+    console.error("Failed to record audit:", err.message);
+  }
+}
+
+function ensureDefaultItem() {
+  const existing = db.prepare("SELECT id FROM download_items ORDER BY id LIMIT 1").get();
+  if (existing) return existing.id;
+  const info = db
+    .prepare(
+      "INSERT INTO download_items (name, file_path, price_cents, active, created_at) VALUES (?, ?, 0, 1, ?)",
+    )
+    .run("OverlayHud Package", `/${ZIP_FILE}`, new Date().toISOString());
+  return info.lastInsertRowid;
 }
 
 async function shutdown(reason = "SIGTERM") {

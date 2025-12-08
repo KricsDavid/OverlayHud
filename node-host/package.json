@@ -18,8 +18,12 @@
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^9.4.3",
     "express": "^5.2.1",
-    "localtunnel": "^2.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "localtunnel": "^2.0.2",
+    "nanoid": "^5.0.6"
   },
   "devDependencies": {
     "cross-env": "^10.1.0"

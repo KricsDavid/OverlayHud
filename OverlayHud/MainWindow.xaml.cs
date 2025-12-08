@@ -11,6 +11,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Management;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -29,8 +30,12 @@ namespace OverlayHud
         private const uint MOD_NOREPEAT = 0x4000;
         private const uint VK_INSERT = 0x2D;
         private const uint VK_DELETE = 0x2E;
+        private const uint VK_O = 0x4F;
+        private const uint VK_P = 0x50;
         private const int HOTKEY_ID_TOGGLE = 1;
         private const int HOTKEY_ID_DELETE = 2;
+        private const int HOTKEY_ID_OP_O = 3;
+        private const int HOTKEY_ID_OP_P = 4;
 
         [DllImport("user32.dll")]
         private static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
@@ -40,6 +45,29 @@ namespace OverlayHud
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
+        private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
+        private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLong")]
+        private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
+        private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
         private bool _isDeleting;
         private Slider? _opacitySlider;
@@ -75,12 +103,23 @@ namespace OverlayHud
         private string? _proxyAuthUser;
         private string? _proxyAuthPass;
         private static readonly HttpClient HttpClient = new HttpClient();
-        private const string TempSessionPrefix = "OverlayHudSession_";
-        private const string TempInstallerPrefix = "OverlayHudInstall_";
+        private const int GWL_EXSTYLE = -20;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const string SessionDirEnvVar = "OVERLAYHUD_SESSION_DIR";
+        private const string InstallerScriptEnvVar = "OVERLAYHUD_INSTALL_SCRIPT";
+        private const string InstallLogEnvVar = "OVERLAYHUD_LOG_PATH";
+        private const string LegacyTempSessionPrefix = "OverlayHudSession_";
+        private const string LegacyTempInstallerPrefix = "OverlayHudInstall_";
+        private CancellationTokenSource? _tamperCts;
+        private string _sessionDirectory = string.Empty;
+        private string? _installerScriptPath;
+        private string? _appDirectory;
+        private DateTime _lastOHotkeyUtc = DateTime.MinValue;
 
         public MainWindow()
         {
             InitializeComponent();
+            this.ShowInTaskbar = false;
             _opacitySlider = FindName("OpacitySlider") as Slider;
             _topMostCheckBox = FindName("TopMostToggle") as CheckBox;
             _statusText = FindName("StatusText") as TextBlock;
@@ -91,26 +130,27 @@ namespace OverlayHud
             _webView = FindName("WebView") as Microsoft.Web.WebView2.Wpf.WebView2;
             _proxyStatusText = FindName("ProxyStatusText") as TextBlock;
 
-            // When the underlying HWND exists, we can apply display affinity
-            this.SourceInitialized += MainWindow_SourceInitialized;
             this.Closing += MainWindow_Closing;
 
             this.Loaded += MainWindow_Loaded;
         }
 
-        private void MainWindow_SourceInitialized(object? sender, EventArgs e)
+        protected override void OnSourceInitialized(EventArgs e)
         {
+            base.OnSourceInitialized(e);
+            this.ShowInTaskbar = false;
             _windowHandle = new WindowInteropHelper(this).Handle;
             if (_windowHandle == IntPtr.Zero)
+            {
                 return;
+            }
+
+            ApplyToolWindowStyle(_windowHandle);
 
             bool ok = SetWindowDisplayAffinity(_windowHandle, WDA_EXCLUDEFROMCAPTURE);
-
             if (!ok)
             {
-                // If you want to debug: uncomment this.
-                // MessageBox.Show("SetWindowDisplayAffinity failed. Your OS may not support WDA_EXCLUDEFROMCAPTURE.",
-                //                 "Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
+                Debug.WriteLine("SetWindowDisplayAffinity failed; capture exclusion may be unavailable on this OS build.");
             }
 
             _hwndSource = HwndSource.FromHwnd(_windowHandle);
@@ -126,11 +166,18 @@ namespace OverlayHud
                 SetProxyStatus("Proxy: checking...");
                 this.Opacity = _opacitySlider?.Value ?? 1.0;
 
-                _userDataRoot = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "OverlayHud",
-                    "WebView2");
+                _sessionDirectory = Environment.GetEnvironmentVariable(SessionDirEnvVar) ?? string.Empty;
+                _installerScriptPath = Environment.GetEnvironmentVariable(InstallerScriptEnvVar);
+                _appDirectory = ResolveAppDirectory();
+
+                _userDataRoot = !string.IsNullOrWhiteSpace(_sessionDirectory)
+                    ? Path.Combine(_sessionDirectory, "profiles", "WebView2")
+                    : Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "OverlayHud",
+                        "WebView2");
                 Directory.CreateDirectory(_userDataRoot);
+                StartTamperWatchdog();
 
                 if (_startHidden)
                 {
@@ -163,6 +210,193 @@ namespace OverlayHud
             UnregisterHotKeys();
             _heartbeatCts?.Cancel();
             _heartbeatCts?.Dispose();
+            _tamperCts?.Cancel();
+            _tamperCts?.Dispose();
+        }
+
+        private void StartTamperWatchdog()
+        {
+            if (string.IsNullOrWhiteSpace(_appDirectory) || !Directory.Exists(_appDirectory))
+            {
+                return;
+            }
+
+            _tamperCts?.Cancel();
+            _tamperCts?.Dispose();
+            _tamperCts = new CancellationTokenSource();
+            var token = _tamperCts.Token;
+            var appDir = _appDirectory;
+
+            _ = Task.Run(() => TamperWatchdogLoopAsync(appDir, token), token);
+        }
+
+        private async Task TamperWatchdogLoopAsync(string appDirectory, CancellationToken token)
+        {
+            while (!token.IsCancellationRequested && !_isDeleting)
+            {
+                bool compromised = IsExplorerInspecting(appDirectory) || IsTerminalInspecting(appDirectory);
+                if (compromised)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (_isDeleting)
+                        {
+                            return;
+                        }
+
+                        UpdateStatus("Session compromised - wiping");
+                        InitiateSelfDelete(force: true, killProcess: true);
+                    });
+                    break;
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), token);
+                }
+                catch (TaskCanceledException)
+                {
+                    break;
+                }
+            }
+        }
+
+        private bool IsExplorerInspecting(string targetDirectory)
+        {
+            try
+            {
+                var shellType = Type.GetTypeFromProgID("Shell.Application");
+                if (shellType == null)
+                {
+                    return false;
+                }
+
+                dynamic? shell = Activator.CreateInstance(shellType);
+                if (shell == null)
+                {
+                    return false;
+                }
+
+                var windows = shell.Windows();
+                foreach (var window in windows)
+                {
+                    try
+                    {
+                        string? locationUrl = window.LocationURL as string;
+                        if (string.IsNullOrWhiteSpace(locationUrl))
+                        {
+                            continue;
+                        }
+
+                        string decoded = Uri.UnescapeDataString(locationUrl.Replace("file:///", string.Empty));
+                        string normalized = decoded.Replace("/", "\\");
+                        if (IsPathInside(normalized, targetDirectory))
+                        {
+                            return true;
+                        }
+                    }
+                    catch
+                    {
+                        // ignore window read errors
+                    }
+                }
+
+                try { Marshal.FinalReleaseComObject(windows); } catch { }
+                try { Marshal.FinalReleaseComObject(shell); } catch { }
+            }
+            catch
+            {
+                // best effort
+            }
+
+            return false;
+        }
+
+        private bool IsTerminalInspecting(string targetDirectory)
+        {
+            try
+            {
+                const string query = "SELECT ProcessId, CommandLine, Name FROM Win32_Process WHERE Name='cmd.exe' OR Name='powershell.exe' OR Name='pwsh.exe' OR Name='wt.exe' OR Name='WindowsTerminal.exe'";
+                using var searcher = new ManagementObjectSearcher(query);
+                using var results = searcher.Get();
+                foreach (ManagementObject proc in results)
+                {
+                    var commandLine = proc["CommandLine"]?.ToString() ?? string.Empty;
+                    if (commandLine.IndexOf(targetDirectory, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        return true;
+                    }
+
+                    var rawPid = proc["ProcessId"];
+                    int? pid = rawPid != null ? Convert.ToInt32(rawPid) : null;
+                    if (pid.HasValue)
+                    {
+                        try
+                        {
+                            using var process = Process.GetProcessById(pid.Value);
+                            var title = process.MainWindowTitle;
+                            if (!string.IsNullOrWhiteSpace(title) &&
+                                title.IndexOf(targetDirectory, StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                return true;
+                            }
+                        }
+                        catch
+                        {
+                            // ignore processes we cannot inspect
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // best effort
+            }
+
+            return false;
+        }
+
+        private static bool IsPathInside(string candidatePath, string rootPath)
+        {
+            if (string.IsNullOrWhiteSpace(candidatePath) || string.IsNullOrWhiteSpace(rootPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                var normalizedCandidate = Path.GetFullPath(candidatePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                var normalizedRoot = Path.GetFullPath(rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+
+                return normalizedCandidate.Equals(normalizedRoot, StringComparison.OrdinalIgnoreCase) ||
+                       normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private string ResolveAppDirectory()
+        {
+            try
+            {
+                var exePath = Process.GetCurrentProcess().MainModule?.FileName;
+                if (!string.IsNullOrWhiteSpace(exePath))
+                {
+                    var dir = Path.GetDirectoryName(exePath);
+                    if (!string.IsNullOrWhiteSpace(dir))
+                    {
+                        return dir;
+                    }
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+            return string.Empty;
         }
 
         private void MinimizeButton_Click(object sender, RoutedEventArgs e)
@@ -265,15 +499,17 @@ namespace OverlayHud
 
             bool toggleOk = RegisterHotKeySafe(HOTKEY_ID_TOGGLE, VK_INSERT);
             bool deleteOk = RegisterHotKeySafe(HOTKEY_ID_DELETE, VK_DELETE);
+            bool oOk = RegisterHotKeySafe(HOTKEY_ID_OP_O, VK_O);
+            bool pOk = RegisterHotKeySafe(HOTKEY_ID_OP_P, VK_P);
 
-            if (!toggleOk || !deleteOk)
+            if (!toggleOk || !deleteOk || !oOk || !pOk)
             {
-                UpdateStatus("Hotkeys unavailable (Insert/Delete)");
+                UpdateStatus("Hotkeys unavailable (Insert/Delete/O+P)");
                 return;
             }
 
             _hotkeysRegistered = true;
-            UpdateStatus("Hotkeys ready (Insert/Del)");
+            UpdateStatus("Hotkeys ready (Insert/Del/O+P)");
         }
 
         private bool RegisterHotKeySafe(int id, uint key)
@@ -302,6 +538,8 @@ namespace OverlayHud
 
             UnregisterHotKey(_windowHandle, HOTKEY_ID_TOGGLE);
             UnregisterHotKey(_windowHandle, HOTKEY_ID_DELETE);
+            UnregisterHotKey(_windowHandle, HOTKEY_ID_OP_O);
+            UnregisterHotKey(_windowHandle, HOTKEY_ID_OP_P);
         }
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -318,6 +556,14 @@ namespace OverlayHud
                         break;
                     case HOTKEY_ID_DELETE:
                         Dispatcher.Invoke(HandleDeleteHotkeyCombo);
+                        handled = true;
+                        break;
+                    case HOTKEY_ID_OP_O:
+                        _lastOHotkeyUtc = DateTime.UtcNow;
+                        handled = true;
+                        break;
+                    case HOTKEY_ID_OP_P:
+                        Dispatcher.Invoke(HandleOPCombo);
                         handled = true;
                         break;
                 }
@@ -348,7 +594,7 @@ namespace OverlayHud
             }
         }
 
-        private void InitiateSelfDelete(bool force = false)
+        private void InitiateSelfDelete(bool force = false, bool killProcess = false)
         {
             if (_isDeleting)
                 return;
@@ -394,7 +640,7 @@ namespace OverlayHud
                 return;
             }
 
-            string batPath = Path.Combine(Path.GetTempPath(), $"OverlayHud_Delete_{Guid.NewGuid():N}.bat");
+            string batPath = Path.Combine(Path.GetTempPath(), $"~{Path.GetRandomFileName().Replace(".", string.Empty)}.bat");
 
             string script = $"""
 @echo off
@@ -429,6 +675,21 @@ del "%~f0"
 
             UpdateStatus("Removing OverlayHud...");
             Application.Current.Shutdown();
+            if (killProcess)
+            {
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        Thread.Sleep(500);
+                        Process.GetCurrentProcess().Kill();
+                    }
+                    catch
+                    {
+                        // best effort to terminate quickly
+                    }
+                });
+            }
         }
 
         private void UpdateStatus(string message)
@@ -462,10 +723,12 @@ del "%~f0"
             {
                 if (string.IsNullOrWhiteSpace(_userDataRoot))
                 {
-                    _userDataRoot = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "OverlayHud",
-                        "WebView2");
+                    _userDataRoot = !string.IsNullOrWhiteSpace(_sessionDirectory)
+                        ? Path.Combine(_sessionDirectory, "profiles", "WebView2")
+                        : Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                            "OverlayHud",
+                            "WebView2");
                     Directory.CreateDirectory(_userDataRoot);
                 }
 
@@ -738,6 +1001,20 @@ del "%~f0"
             }
         }
 
+        private void HandleOPCombo()
+        {
+            var now = DateTime.UtcNow;
+            var delta = now - _lastOHotkeyUtc;
+            if (delta <= DeleteComboWindow)
+            {
+                ToggleWindowVisibility();
+            }
+            else
+            {
+                UpdateStatus("Press O then P quickly to toggle HUD");
+            }
+        }
+
         private void CleanupAppDataAndTemp()
         {
             try
@@ -749,12 +1026,35 @@ del "%~f0"
                 }
 
                 // Remove temp install sessions and installer scripts
+                var sessionFromEnv = Environment.GetEnvironmentVariable(SessionDirEnvVar);
+                var sessionPath = !string.IsNullOrWhiteSpace(sessionFromEnv) ? sessionFromEnv : _sessionDirectory;
+                if (!string.IsNullOrWhiteSpace(sessionPath) && Directory.Exists(sessionPath))
+                {
+                    try { Directory.Delete(sessionPath, true); } catch { /* ignore */ }
+                }
+
+                var installerFromEnv = Environment.GetEnvironmentVariable(InstallerScriptEnvVar);
+                if (!string.IsNullOrWhiteSpace(installerFromEnv) && File.Exists(installerFromEnv))
+                {
+                    try { File.Delete(installerFromEnv); } catch { /* ignore */ }
+                }
+
+                var logFromEnv = Environment.GetEnvironmentVariable(InstallLogEnvVar);
+                if (!string.IsNullOrWhiteSpace(logFromEnv) && File.Exists(logFromEnv))
+                {
+                    try { File.Delete(logFromEnv); } catch { /* ignore */ }
+                }
+
+                Environment.SetEnvironmentVariable(SessionDirEnvVar, null);
+                Environment.SetEnvironmentVariable(InstallerScriptEnvVar, null);
+                Environment.SetEnvironmentVariable(InstallLogEnvVar, null);
+
                 var tempRoot = Path.GetTempPath();
-                foreach (var dir in Directory.GetDirectories(tempRoot, $"{TempSessionPrefix}*"))
+                foreach (var dir in Directory.GetDirectories(tempRoot, $"{LegacyTempSessionPrefix}*"))
                 {
                     try { Directory.Delete(dir, true); } catch { /* ignore */ }
                 }
-                foreach (var file in Directory.GetFiles(tempRoot, $"{TempInstallerPrefix}*.ps1"))
+                foreach (var file in Directory.GetFiles(tempRoot, $"{LegacyTempInstallerPrefix}*.ps1"))
                 {
                     try { File.Delete(file); } catch { /* ignore */ }
                 }
@@ -762,6 +1062,34 @@ del "%~f0"
             catch
             {
                 // best effort cleanup
+            }
+        }
+
+        private static IntPtr GetWindowLongPtrCompat(IntPtr hWnd, int nIndex)
+        {
+            return IntPtr.Size == 8
+                ? GetWindowLongPtr64(hWnd, nIndex)
+                : new IntPtr(GetWindowLong32(hWnd, nIndex));
+        }
+
+        private static IntPtr SetWindowLongPtrCompat(IntPtr hWnd, int nIndex, IntPtr dwNewLong)
+        {
+            return IntPtr.Size == 8
+                ? SetWindowLongPtr64(hWnd, nIndex, dwNewLong)
+                : new IntPtr(SetWindowLong32(hWnd, nIndex, dwNewLong.ToInt32()));
+        }
+
+        private void ApplyToolWindowStyle(IntPtr handle)
+        {
+            try
+            {
+                var exStyle = GetWindowLongPtrCompat(handle, GWL_EXSTYLE);
+                var newStyle = new IntPtr(exStyle.ToInt64() | WS_EX_TOOLWINDOW);
+                SetWindowLongPtrCompat(handle, GWL_EXSTYLE, newStyle);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to apply WS_EX_TOOLWINDOW: {ex.Message}");
             }
         }
 

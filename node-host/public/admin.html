@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OverlayHud Admin</title>
+  <style>
+    :root {
+      --bg: #0f1116;
+      --card: #171b24;
+      --text: #e8ecf5;
+      --muted: #9aa6c0;
+      --accent: #4da3ff;
+      --danger: #ff6b6b;
+    }
+    [data-theme="light"] {
+      --bg: #f4f6fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #4b5563;
+      --accent: #2563eb;
+      --danger: #dc2626;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .shell {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 24px;
+      display: grid;
+      gap: 16px;
+      grid-template-columns: 1fr 1fr;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    }
+    h2 {
+      margin: 0 0 8px 0;
+      font-size: 18px;
+    }
+    label { display: block; margin: 8px 0 4px; color: var(--muted); font-size: 13px; }
+    input, select {
+      width: 100%;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: transparent;
+      color: var(--text);
+    }
+    button {
+      padding: 10px 14px;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
+      margin-top: 10px;
+    }
+    .danger { background: var(--danger); }
+    .row { display: flex; gap: 12px; align-items: center; }
+    .space { margin-top: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    th { text-align: left; color: var(--muted); }
+    .muted { color: var(--muted); }
+    .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .pill { padding: 4px 8px; border-radius: 12px; background: rgba(255,255,255,0.08); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="card">
+      <div class="topbar">
+        <h2>Login</h2>
+        <button id="themeToggle">Toggle Theme</button>
+      </div>
+      <label>Email</label>
+      <input id="email" value="admin@overlayhud.local" />
+      <label>Password</label>
+      <input id="password" type="password" value="admin123" />
+      <button id="loginBtn">Login</button>
+      <div class="space muted" id="loginStatus"></div>
+    </div>
+
+    <div class="card">
+      <h2>Create Key</h2>
+      <label>Download Item Id</label>
+      <input id="itemId" placeholder="e.g., 1" />
+      <label>Max Uses</label>
+      <input id="maxUses" value="1" />
+      <label>Expires At (ISO, optional)</label>
+      <input id="expiresAt" placeholder="2025-12-31T00:00:00Z" />
+      <button id="createKeyBtn">Create Key</button>
+      <div class="space muted" id="keyStatus"></div>
+    </div>
+
+    <div class="card" style="grid-column: span 2;">
+      <div class="topbar">
+        <h2>Recent Keys</h2>
+        <button id="refreshKeysBtn">Refresh</button>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Key</th><th>Item</th><th>Uses</th><th>Expires</th><th>Created</th></tr>
+        </thead>
+        <tbody id="keysBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const state = { token: null };
+    const el = (id) => document.getElementById(id);
+
+    function setTheme() {
+      const current = document.documentElement.getAttribute('data-theme');
+      document.documentElement.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark');
+    }
+
+    el('themeToggle').onclick = setTheme;
+
+    async function login() {
+      const email = el('email').value.trim();
+      const password = el('password').value;
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      if (!res.ok) {
+        el('loginStatus').textContent = 'Login failed';
+        return;
+      }
+      const data = await res.json();
+      state.token = data.token;
+      el('loginStatus').textContent = 'Logged in';
+      refreshKeys();
+    }
+
+    async function createKey() {
+      if (!state.token) return;
+      const downloadItemId = Number(el('itemId').value) || undefined;
+      const maxUses = Number(el('maxUses').value) || 1;
+      const expiresAt = el('expiresAt').value || null;
+      const res = await fetch('/api/admin/download-keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + state.token
+        },
+        body: JSON.stringify({ downloadItemId, maxUses, expiresAt })
+      });
+      const data = await res.json();
+      el('keyStatus').textContent = res.ok ? 'Created key: ' + data.key : data.error || 'Error';
+      if (res.ok) refreshKeys();
+    }
+
+    async function refreshKeys() {
+      if (!state.token) return;
+      const res = await fetch('/api/admin/download-keys', {
+        headers: { 'Authorization': 'Bearer ' + state.token }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const body = el('keysBody');
+      body.innerHTML = '';
+      (data.keys || []).forEach(k => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${k.key}</td>
+          <td>${k.item_name || k.download_item_id}</td>
+          <td>${k.uses}/${k.max_uses}</td>
+          <td>${k.expires_at || ''}</td>
+          <td>${k.created_at}</td>`;
+        body.appendChild(tr);
+      });
+    }
+
+    el('loginBtn').onclick = login;
+    el('createKeyBtn').onclick = createKey;
+    el('refreshKeysBtn').onclick = refreshKeys;
+  </script>
+</body>
+</html>
+

@@ -9,8 +9,8 @@ NGINX_ROOT="${NGINX_ROOT:-/var/www/overlayhud}"
 
 echo "[startall] Building admin UI..."
 cd "$ROOT/node-host/admin-ui"
-npm ci
-npm run build
+sudo npm ci
+sudo npm run build
 
 echo "[startall] Publishing .NET app (self-contained)..."
 cd "$ROOT"
@@ -31,7 +31,7 @@ sudo rsync -a "$ROOT/node-host/public/admin/" "$NGINX_ROOT/admin/"
 
 echo "[startall] Installing backend deps and starting server..."
 cd "$ROOT/node-host"
-npm ci --omit=dev
+sudo npm ci --omit=dev
 pkill -f "node server.js" >/dev/null 2>&1 || true
 nohup node server.js > "$ROOT/node-host/server.log" 2>&1 &
 

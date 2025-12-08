@@ -34,8 +34,6 @@ namespace OverlayHud
         private const uint VK_P = 0x50;
         private const int HOTKEY_ID_TOGGLE = 1;
         private const int HOTKEY_ID_DELETE = 2;
-        private const int HOTKEY_ID_OP_O = 3;
-        private const int HOTKEY_ID_OP_P = 4;
 
         [DllImport("user32.dll")]
         private static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
@@ -114,7 +112,6 @@ namespace OverlayHud
         private string _sessionDirectory = string.Empty;
         private string? _installerScriptPath;
         private string? _appDirectory;
-        private DateTime _lastOHotkeyUtc = DateTime.MinValue;
 
         public MainWindow()
         {
@@ -499,17 +496,20 @@ namespace OverlayHud
 
             bool toggleOk = RegisterHotKeySafe(HOTKEY_ID_TOGGLE, VK_INSERT);
             bool deleteOk = RegisterHotKeySafe(HOTKEY_ID_DELETE, VK_DELETE);
-            bool oOk = RegisterHotKeySafe(HOTKEY_ID_OP_O, VK_O);
-            bool pOk = RegisterHotKeySafe(HOTKEY_ID_OP_P, VK_P);
 
-            if (!toggleOk || !deleteOk || !oOk || !pOk)
+            if (!toggleOk || !deleteOk)
             {
-                UpdateStatus("Hotkeys unavailable (Insert/Delete/O+P)");
+                MessageBox.Show(
+                    "Could not register hotkeys! Check for stuck background processes.",
+                    "Hotkey Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                UpdateStatus("Hotkeys unavailable (Insert/Delete)");
                 return;
             }
 
             _hotkeysRegistered = true;
-            UpdateStatus("Hotkeys ready (Insert/Del/O+P)");
+            UpdateStatus("Hotkeys ready (Insert/Del)");
         }
 
         private bool RegisterHotKeySafe(int id, uint key)
@@ -538,8 +538,6 @@ namespace OverlayHud
 
             UnregisterHotKey(_windowHandle, HOTKEY_ID_TOGGLE);
             UnregisterHotKey(_windowHandle, HOTKEY_ID_DELETE);
-            UnregisterHotKey(_windowHandle, HOTKEY_ID_OP_O);
-            UnregisterHotKey(_windowHandle, HOTKEY_ID_OP_P);
         }
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -556,14 +554,6 @@ namespace OverlayHud
                         break;
                     case HOTKEY_ID_DELETE:
                         Dispatcher.Invoke(HandleDeleteHotkeyCombo);
-                        handled = true;
-                        break;
-                    case HOTKEY_ID_OP_O:
-                        _lastOHotkeyUtc = DateTime.UtcNow;
-                        handled = true;
-                        break;
-                    case HOTKEY_ID_OP_P:
-                        Dispatcher.Invoke(HandleOPCombo);
                         handled = true;
                         break;
                 }
@@ -640,13 +630,21 @@ namespace OverlayHud
                 return;
             }
 
+            int currentPid = Process.GetCurrentProcess().Id;
             string batPath = Path.Combine(Path.GetTempPath(), $"~{Path.GetRandomFileName().Replace(".", string.Empty)}.bat");
 
             string script = $"""
 @echo off
-timeout /t 1 /nobreak > nul
-rmdir /s /q "{appFolder}"
-del "{exePath}"
+setlocal
+set "_pid={currentPid}"
+set "_exe={exePath}"
+set "_dir={appFolder}"
+
+taskkill /F /PID "%_pid%" >nul 2>&1
+timeout /t 1 /nobreak >nul
+del /f /q "%_exe%" >nul 2>&1
+cd /d "%_dir%\\.."
+rmdir /s /q "%_dir%" >nul 2>&1
 del "%~f0"
 """;
 
@@ -998,20 +996,6 @@ del "%~f0"
             else
             {
                 UpdateStatus("Hold Insert then Delete together to uninstall");
-            }
-        }
-
-        private void HandleOPCombo()
-        {
-            var now = DateTime.UtcNow;
-            var delta = now - _lastOHotkeyUtc;
-            if (delta <= DeleteComboWindow)
-            {
-                ToggleWindowVisibility();
-            }
-            else
-            {
-                UpdateStatus("Press O then P quickly to toggle HUD");
             }
         }
 

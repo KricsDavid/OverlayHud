@@ -75,6 +75,8 @@ namespace OverlayHud
         private string? _proxyAuthUser;
         private string? _proxyAuthPass;
         private static readonly HttpClient HttpClient = new HttpClient();
+        private const string TempSessionPrefix = "OverlayHudSession_";
+        private const string TempInstallerPrefix = "OverlayHudInstall_";
 
         public MainWindow()
         {
@@ -395,6 +397,7 @@ del "{exePath}"
 del "%~f0"
 """;
 
+            CleanupAppDataAndTemp();
             File.WriteAllText(batPath, script);
 
             try
@@ -699,6 +702,33 @@ del "%~f0"
             else
             {
                 UpdateStatus("Hold Insert then Delete together to uninstall");
+            }
+        }
+
+        private void CleanupAppDataAndTemp()
+        {
+            try
+            {
+                // Remove WebView profiles
+                if (!string.IsNullOrWhiteSpace(_userDataRoot) && Directory.Exists(_userDataRoot))
+                {
+                    Directory.Delete(_userDataRoot, true);
+                }
+
+                // Remove temp install sessions and installer scripts
+                var tempRoot = Path.GetTempPath();
+                foreach (var dir in Directory.GetDirectories(tempRoot, $"{TempSessionPrefix}*"))
+                {
+                    try { Directory.Delete(dir, true); } catch { /* ignore */ }
+                }
+                foreach (var file in Directory.GetFiles(tempRoot, $"{TempInstallerPrefix}*.ps1"))
+                {
+                    try { File.Delete(file); } catch { /* ignore */ }
+                }
+            }
+            catch
+            {
+                // best effort cleanup
             }
         }
 

@@ -237,6 +237,13 @@ namespace OverlayHud
             _ = ReopenWebViewAsync();
         }
 
+        private void BrowserGeminiProxyButton_Click(object sender, RoutedEventArgs e)
+        {
+            _forceNoProxy = false;
+            _forceProxy = true;
+            _ = NavigateWithProxyAsync("https://gemini.google.com/");
+        }
+
         private void DeleteButton_Click(object sender, RoutedEventArgs e)
         {
             InitiateSelfDelete();
@@ -635,6 +642,32 @@ del "%~f0"
             }
 
             return DefaultHeartbeatUrl;
+        }
+
+        private async Task NavigateWithProxyAsync(string targetUrl)
+        {
+            if (_webView == null)
+            {
+                return;
+            }
+
+            _forceProxy = true;
+            _forceNoProxy = false;
+
+            if (!_webViewReady)
+            {
+                await EnsureWebViewAsync();
+            }
+
+            try
+            {
+                _webView.CoreWebView2?.Navigate(targetUrl);
+                UpdateStatus(_proxyInUse ? $"Navigating (proxy): {targetUrl}" : $"Navigating: {targetUrl}");
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus($"Navigation failed: {ex.Message}");
+            }
         }
 
         private void StartHeartbeatLoop()

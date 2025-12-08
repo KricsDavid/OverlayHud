@@ -160,6 +160,10 @@
                                     Content="Start ChatGPT without proxy"
                                     Style="{StaticResource AccentButtonStyle}"
                                     Click="BrowserDirectButton_Click" />
+                            <Button x:Name="BrowserGeminiProxyButton"
+                                    Content="Open Gemini with proxy"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Click="BrowserGeminiProxyButton_Click" />
 
                             <CheckBox x:Name="TopMostToggle"
                                       Content="Keep on top"
@@ -207,6 +211,12 @@
                                            Text="Proxy: checking..."
                                            TextWrapping="Wrap"
                                            MaxWidth="180" />
+                                <TextBlock Text="Keybinds: Insert = Show/Hide, Insert+Delete = Uninstall"
+                                           Foreground="#66FFFFFF"
+                                           FontSize="11"
+                                           TextWrapping="Wrap"
+                                           MaxWidth="200"
+                                           Margin="0,6,0,0" />
                             </StackPanel>
                         </StackPanel>
                     </Border>

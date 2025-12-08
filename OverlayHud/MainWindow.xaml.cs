@@ -71,6 +71,8 @@ namespace OverlayHud
         private DateTime _lastInsertHotkeyUtc = DateTime.MinValue;
         private static readonly TimeSpan DeleteComboWindow = TimeSpan.FromSeconds(1.5);
         private bool _forceNoProxy;
+        private string? _proxyAuthUser;
+        private string? _proxyAuthPass;
         private static readonly HttpClient HttpClient = new HttpClient();
 
         public MainWindow()
@@ -459,6 +461,8 @@ del "%~f0"
                 }
 
                 CoreWebView2EnvironmentOptions? envOptions = null;
+                _proxyAuthUser = null;
+                _proxyAuthPass = null;
 
                 var proxy = Environment.GetEnvironmentVariable("MASK_PROXY");
                 var proxyBypass = Environment.GetEnvironmentVariable("MASK_PROXY_BYPASS");
@@ -477,7 +481,11 @@ del "%~f0"
 
                 if (useProxy && !string.IsNullOrWhiteSpace(proxy))
                 {
-                    var sanitizedProxy = SanitizeProxy(proxy);
+                    var (cleanProxy, user, pass) = ParseProxy(proxy);
+                    _proxyAuthUser = user;
+                    _proxyAuthPass = pass;
+
+                    var sanitizedProxy = SanitizeProxy(cleanProxy);
                     var args = $"--proxy-server={sanitizedProxy}";
                     if (!string.IsNullOrWhiteSpace(proxyBypass))
                     {
@@ -504,6 +512,9 @@ del "%~f0"
 
                 if (core != null)
                 {
+                    core.BasicAuthenticationRequested -= Core_BasicAuthenticationRequested;
+                    core.BasicAuthenticationRequested += Core_BasicAuthenticationRequested;
+
                     var userAgent = ResolveUserAgent();
                     core.Settings.UserAgent = userAgent;
 
@@ -542,6 +553,54 @@ del "%~f0"
         {
             // auth in URI format for WebView2 command-line proxy
             return $"http://{DefaultProxyUser}:{DefaultProxyPass}@{DefaultProxyHost}:{DefaultProxyPort}";
+        }
+
+        private static (string cleanProxy, string? user, string? pass) ParseProxy(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return (string.Empty, null, null);
+            }
+
+            string proxy = raw.Trim();
+
+            if (!proxy.Contains("://", StringComparison.Ordinal))
+            {
+                proxy = "http://" + proxy;
+            }
+
+            try
+            {
+                if (Uri.TryCreate(proxy, UriKind.Absolute, out var uri))
+                {
+                    string userInfo = uri.UserInfo;
+                    string? user = null;
+                    string? pass = null;
+                    if (!string.IsNullOrEmpty(userInfo))
+                    {
+                        var parts = userInfo.Split(':', 2);
+                        user = Uri.UnescapeDataString(parts[0]);
+                        if (parts.Length > 1)
+                        {
+                            pass = Uri.UnescapeDataString(parts[1]);
+                        }
+                    }
+
+                    var builder = new UriBuilder(uri)
+                    {
+                        UserName = string.Empty,
+                        Password = string.Empty
+                    };
+                    string clean = builder.Uri.GetLeftPart(UriPartial.Authority);
+                    return (clean, user, pass);
+                }
+            }
+            catch
+            {
+                // ignore parse failures, fall back
+            }
+
+            return (raw, null, null);
         }
 
         private static bool IsProxyDisabledValue(string? value)
@@ -642,6 +701,24 @@ del "%~f0"
                 trimmed = trimmed.TrimEnd('/');
             }
             return trimmed;
+        }
+
+        private void Core_BasicAuthenticationRequested(object? sender, CoreWebView2BasicAuthenticationRequestedEventArgs e)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(_proxyAuthUser) || string.IsNullOrWhiteSpace(_proxyAuthPass))
+                {
+                    return;
+                }
+
+                e.Response.UserName = _proxyAuthUser;
+                e.Response.Password = _proxyAuthPass;
+            }
+            catch
+            {
+                // best effort
+            }
         }
 
         private async Task ReopenWebViewAsync()

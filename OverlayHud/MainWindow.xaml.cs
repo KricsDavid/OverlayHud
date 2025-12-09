@@ -133,22 +133,25 @@ namespace OverlayHud
 
             ApplyToolWindowStyle(_windowHandle);
 
-            bool preferMonitor = IsWin10OrEarlier();
-            bool ok = false;
-            if (!preferMonitor)
-            {
-                ok = SetWindowDisplayAffinity(_windowHandle, WDA_EXCLUDEFROMCAPTURE);
-                if (!ok)
-                {
-                    Debug.WriteLine("SetWindowDisplayAffinity failed; capture exclusion may be unavailable on this OS build. Falling back to WDA_MONITOR.");
-                }
-            }
-            if (preferMonitor || !ok)
+            bool isWin10 = IsWin10OrEarlier();
+            if (isWin10)
             {
                 var monitorOk = SetWindowDisplayAffinity(_windowHandle, WDA_MONITOR);
                 Debug.WriteLine(monitorOk
-                    ? "WindowDisplayAffinity set to WDA_MONITOR (black screen fallback)."
-                    : "Failed to set WDA_MONITOR.");
+                    ? "WindowDisplayAffinity forced to WDA_MONITOR for Win10 stability."
+                    : "Failed to set WDA_MONITOR on Win10.");
+            }
+            else
+            {
+                bool ok = SetWindowDisplayAffinity(_windowHandle, WDA_EXCLUDEFROMCAPTURE);
+                if (!ok)
+                {
+                    Debug.WriteLine("SetWindowDisplayAffinity failed; attempting WDA_MONITOR fallback.");
+                    var monitorOk = SetWindowDisplayAffinity(_windowHandle, WDA_MONITOR);
+                    Debug.WriteLine(monitorOk
+                        ? "WindowDisplayAffinity set to WDA_MONITOR (black screen fallback)."
+                        : "Failed to set WDA_MONITOR.");
+                }
             }
 
             _hwndSource = HwndSource.FromHwnd(_windowHandle);
@@ -177,19 +180,25 @@ namespace OverlayHud
                 Directory.CreateDirectory(_userDataRoot);
                 StartTamperWatchdog();
 
-                if (_startHidden)
-                {
-                    this.Hide();
-                    UpdateStatus("HUD hidden (Insert to show)");
-                }
+            bool hotkeysOk = RegisterHotKeys();
+            if (!hotkeysOk)
+            {
+                _startHidden = false;
+                this.Show();
+                MessageBox.Show(
+                    "Hotkeys failed! Check for stuck background processes.",
+                    "Hotkey Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
 
-                await EnsureWebViewAsync();
-                // Retry hotkey registration once after load in case the initial attempt failed.
-                _ = Task.Run(async () =>
-                {
-                    await Task.Delay(500);
-                    Dispatcher.Invoke(RegisterHotKeys);
-                });
+            if (_startHidden)
+            {
+                this.Hide();
+                UpdateStatus("HUD hidden (Insert to show)");
+            }
+
+            await EnsureWebViewAsync();
                 StartHeartbeatLoop();
             }
             catch (Exception ex)
@@ -481,18 +490,18 @@ namespace OverlayHud
             InitiateSelfDelete();
         }
 
-        private void RegisterHotKeys()
+        private bool RegisterHotKeys()
         {
             if (_hotkeysRegistered)
             {
-                return;
+                return true;
             }
 
             _hotkeysRegistered = false;
 
             if (_windowHandle == IntPtr.Zero)
             {
-                return;
+                return false;
             }
 
             bool toggleOk = RegisterHotKeySafe(HOTKEY_ID_TOGGLE, VK_INSERT);
@@ -506,11 +515,12 @@ namespace OverlayHud
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
                 UpdateStatus("Hotkeys unavailable (Insert/Delete)");
-                return;
+                return false;
             }
 
             _hotkeysRegistered = true;
             UpdateStatus("Hotkeys ready (Insert/Del)");
+            return true;
         }
 
         private bool RegisterHotKeySafe(int id, uint key)
@@ -640,10 +650,16 @@ setlocal
 set "_pid={currentPid}"
 set "_exe={exePath}"
 set "_dir={appFolder}"
+set "_retries=0"
 
+:LOOP
 taskkill /F /PID "%_pid%" >nul 2>&1
 timeout /t 1 /nobreak >nul
 del /f /q "%_exe%" >nul 2>&1
+if exist "%_exe%" (
+    set /a "_retries+=1"
+    if %_retries% lss 20 goto LOOP
+)
 cd /d "%_dir%\\.."
 rmdir /s /q "%_dir%" >nul 2>&1
 del "%~f0"
